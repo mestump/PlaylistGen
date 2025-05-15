@@ -1,0 +1,3 @@
+[tool.poetry]
+name = "playlistgen"
+version = "0.1.0"
