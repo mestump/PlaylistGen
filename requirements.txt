@@ -1,0 +1,9 @@
+# Core dependencies
+pandas>=1.0
+PyYAML>=5.1
+requests>=2.0
+tqdm>=4.0
+scikit-learn>=0.24
+
+# Testing dependencies
+pytest>=6.0

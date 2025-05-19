@@ -1,0 +1,15 @@
+# Ignore log files
+*.log
+
+# Ignore Python cache
+__pycache__/
+
+# Ignore your Itunes XML if you want
+Itunes Library.xml
+itunes_slimmed.json
+playlistgen.log
+spotify_history/
+mixes/
+tests/
+config.yml
+bulk-mood

@@ -1,3 +1,16 @@
 [tool.poetry]
 name = "playlistgen"
 version = "0.1.0"
+description = "Generate playlists based on Spotify history and iTunes library"
+authors = ["Your Name <you@example.com>"]
+
+[tool.poetry.dependencies]
+python = ">=3.8,<4.0"
+pandas = "^1.0"
+PyYAML = "^5.1"
+requests = "^2.0"
+tqdm = "^4.0"
+scikit-learn = "^0.24"
+
+[tool.poetry.dev-dependencies]
+pytest = "^6.0"
