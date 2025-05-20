@@ -57,11 +57,21 @@ Main options:
 
 * `recache-moods`: Force a rebuild of the Last.fm mood cache
 * `--log-level`: Set log level (DEBUG, INFO, etc)
+* `--genre`: Filter mix to only tracks matching the given genre
+* `--mood`: Filter mix to only tracks matching the given mood
 
 Example:
 
 ```bash
 python -m playlistgen recache-moods
+```
+
+Filter by genre or mood:
+
+```bash
+python -m playlistgen --genre "Rap"
+python -m playlistgen --mood "Epic"
+python -m playlistgen --genre "Rap" --mood "Energetic"
 ```
 
 ---

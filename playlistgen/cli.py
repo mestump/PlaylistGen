@@ -24,6 +24,14 @@ def main():
         '--log-level',
         help='Override log level (DEBUG, INFO, WARNING, ERROR)'
     )
+    parser.add_argument(
+        '--genre',
+        help='Filter mix to only tracks matching the given genre'
+    )
+    parser.add_argument(
+        '--mood',
+        help='Filter mix to only tracks matching the given mood'
+    )
     subparsers = parser.add_subparsers(dest='command')
 
     subparsers.add_parser(
@@ -50,7 +58,7 @@ def main():
 
         ensure_tag_mood_cache(cfg, itunes_json)
     else:
-        run_pipeline(cfg)
+        run_pipeline(cfg, genre=args.genre, mood=args.mood)
 
 if __name__ == "__main__":
     main()

@@ -30,7 +30,7 @@ def generate_profile(cfg, tag_mood_path):
     logging.info(f"Building Spotify taste profile from {spotify_dir}")
     build_profile(spotify_dir, tag_mood_path=tag_mood_path)
 
-def run_pipeline(cfg):
+def run_pipeline(cfg, genre=None, mood=None):
     logging.basicConfig(level=logging.INFO)
     logging.info("Starting playlist generation pipeline")
 
@@ -44,6 +44,33 @@ def run_pipeline(cfg):
 
     logging.info("Scoring tracks")
     scored_df = score_tracks(itunes_df, config=profile, tag_mood_db=tag_mood_db)
+
+    if genre or mood:
+        filt_df = scored_df
+        if genre:
+            logging.info(f"Filtering tracks by genre: {genre}")
+            filt_df = filt_df[
+                filt_df['Genre'].notnull() &
+                (filt_df['Genre'].str.lower() == genre.lower())
+            ]
+        if mood:
+            logging.info(f"Filtering tracks by mood: {mood}")
+            filt_df = filt_df[
+                filt_df['Mood'].notnull() &
+                (filt_df['Mood'].str.lower() == mood.lower())
+            ]
+        if filt_df.empty:
+            logging.warning(f"No tracks found matching genre={genre!r} mood={mood!r}")
+            return
+
+        parts = []
+        if mood:
+            parts.append(mood)
+        if genre:
+            parts.append(genre)
+        label = " & ".join(parts) + " Mix"
+        build_playlists([filt_df], scored_df, name_fn=lambda *_: label)
+        return
 
     n_clusters = int(cfg.get('CLUSTER_COUNT', 6))
     num_playlists = int(cfg.get('NUM_PLAYLISTS', n_clusters))
