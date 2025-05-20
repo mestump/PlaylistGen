@@ -43,17 +43,21 @@ def run_pipeline(cfg):
     profile = load_profile(cfg['PROFILE_PATH'])
 
     logging.info("Scoring tracks")
-    scored_df = score_tracks(itunes_df, profile=profile, tag_mood_db=tag_mood_db)
+    scored_df = score_tracks(itunes_df, config=profile, tag_mood_db=tag_mood_db)
 
     n_clusters = int(cfg.get('CLUSTER_COUNT', 6))
     num_playlists = int(cfg.get('NUM_PLAYLISTS', n_clusters))
     cluster_by_year = cfg.get('YEAR_MIX_ENABLED', False)
+    year_range = int(cfg.get('YEAR_MIX_RANGE', 0))
+    cluster_by_mood = cfg.get('CLUSTER_BY_MOOD', False)
     min_tracks_per_year = int(cfg.get('MIN_TRACKS_PER_YEAR', 10))
 
     clusters = cluster_tracks(
         scored_df,
         n_clusters=n_clusters,
         cluster_by_year=cluster_by_year,
+        year_range=year_range,
+        cluster_by_mood=cluster_by_mood,
         min_tracks_per_year=min_tracks_per_year,
     )
 

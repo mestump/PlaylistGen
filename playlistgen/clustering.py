@@ -14,21 +14,39 @@ except ImportError:
     HDBSCAN_AVAILABLE = False
 
 def name_cluster(df=None, i=None):
-    return f"Cluster {i + 1}" if i is not None else "Cluster"
+    """
+    Generate a descriptive name for a cluster based on its top mood and genre.
+    """
+    parts = []
+    if df is not None:
+        if 'Mood' in df.columns and df['Mood'].notnull().any():
+            top_mood = df['Mood'].mode().iloc[0]
+            parts.append(top_mood)
+        if 'Genre' in df.columns and df['Genre'].notnull().any():
+            top_genre = df['Genre'].mode().iloc[0]
+            parts.append(top_genre)
+    if parts:
+        return ' & '.join(parts) + ' Mix'
+    if i is not None:
+        return f"Cluster {i + 1}"
+    return "Cluster"
 
 def cluster_tracks(
     df: pd.DataFrame,
     n_clusters: int = 6,
     use_hdbscan: bool = False,
     cluster_by_year: bool = False,
+    year_range: int = 0,
+    cluster_by_mood: bool = False,
     min_tracks_per_year: int = 25
 ):
     """
-    Clusters tracks using either:
-      - Year-based grouping
-      - Mood/text feature clustering (fallback)
+    Cluster tracks into themes using one of the following strategies (in order):
+      - Mood-based grouping (if enabled)
+      - Year-range grouping (if enabled)
+      - Text/mood feature clustering (fallback)
 
-    Returns: List of DataFrames (one per cluster/year group)
+    Returns a list of DataFrames, one per cluster.
     """
 
     def extract_year(row):
@@ -38,21 +56,49 @@ def cluster_tracks(
                 return int(part)
         return row.get('Year')
 
+    if cluster_by_mood:
+        if 'Mood' not in df.columns or df['Mood'].isnull().all():
+            logging.warning(
+                "CLUSTER_BY_MOOD enabled but no Mood column — falling back to other clustering"
+            )
+        else:
+            mood_groups = []
+            for mood, group in df.groupby('Mood'):
+                if mood and not group.empty:
+                    mood_groups.append(group)
+            if mood_groups:
+                logging.info(
+                    f"Generated {len(mood_groups)} mood-based clusters: {[len(g) for g in mood_groups]}"
+                )
+                return mood_groups
+            logging.warning("No mood-based clusters found — falling back to other clustering")
+
     if cluster_by_year:
         if 'Year' not in df.columns or df['Year'].isnull().all():
             df['Year'] = df.apply(extract_year, axis=1)
 
         year_groups = []
-        for year, group in df.groupby('Year'):
-            if len(group) >= min_tracks_per_year:
-                year_groups.append(group)
+        if year_range and year_range > 0:
+            min_year = int(df['Year'].min())
+            max_year = int(df['Year'].max())
+            start = min_year
+            while start <= max_year:
+                end = start + year_range
+                group = df[(df['Year'] >= start) & (df['Year'] < end)]
+                if len(group) >= min_tracks_per_year:
+                    year_groups.append(group)
+                start += year_range
+        else:
+            for year, group in df.groupby('Year'):
+                if len(group) >= min_tracks_per_year:
+                    year_groups.append(group)
 
         if year_groups:
-            logging.info(f"Clustered into {len(year_groups)} year groups")
-            logging.info(f'Created {len(year_groups)} year-based clusters: {[len(g) for g in year_groups]}')
+            logging.info(
+                f"Clustered into {len(year_groups)} year-based clusters: {[len(g) for g in year_groups]}"
+            )
             return year_groups
-        else:
-            logging.warning("No year-based clusters found — falling back to mood/text clustering")
+        logging.warning("No year-based clusters found — falling back to text/mood clustering")
 
     if not SKLEARN_AVAILABLE:
         logging.warning(f"sklearn not available; using simple split clustering into {n_clusters} groups")

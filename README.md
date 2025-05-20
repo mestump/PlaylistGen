@@ -22,6 +22,11 @@ poetry install
 playlistgen
 ```
 
+```bash
+# Force re-cache of all moods (rebuild Last.fm mood cache)
+playlistgen recache-moods
+```
+
 Or via module:
 
 ```bash
@@ -29,8 +34,8 @@ python -m playlistgen
 ```
 
 ## Configuration
-
-Create `~/.playlistgen/config.yml` to override default settings (see `playlistgen/config.yml` for defaults).
+Create a `config.yml` file in your project root or `~/.playlistgen/config.yml` to override default settings
+(see `playlistgen/config.yml` for defaults).
 
 ## Development
 

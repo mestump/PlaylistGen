@@ -3,10 +3,16 @@ import datetime
 import logging
 from pathlib import Path
 from collections import Counter
-from tqdm import tqdm
 
 from .tag_mood_service import load_tag_mood_db
 from .config import load_config
+
+# Optional progress bar; fall back if tqdm not installed
+try:
+    from tqdm import tqdm
+except ImportError:
+    def tqdm(iterable, **kwargs):
+        return iterable
 
 logging.basicConfig(level=logging.INFO)
 

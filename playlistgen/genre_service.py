@@ -18,7 +18,9 @@ def fetch_genre_online(artist: str, track: str):
     cfg = load_config()
     api_key = cfg.get('LASTFM_API_KEY')
     if not api_key:
-        raise ValueError('LASTFM_API_KEY is not set in config')
+        raise ValueError(
+            "LASTFM_API_KEY is not set. Please set the environment variable or add it to config.yml"
+        )
 
     key = f"{artist} - {track}".lower()
     CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)

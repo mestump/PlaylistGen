@@ -28,7 +28,9 @@ def load_lastfm_api_key():
         return cfg.get("LASTFM_API_KEY")
     except Exception:
         pass
-    raise RuntimeError("LASTFM_API_KEY not set (set env or add to config)")
+    raise RuntimeError(
+        "LASTFM_API_KEY not set. Please set the environment variable or add it to config.yml"
+    )
 
 def fetch_lastfm_tags(artist, track, api_key):
     params = {

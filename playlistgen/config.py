@@ -35,11 +35,29 @@ def load_config(path: str = None) -> dict:
         'CACHE_DB': str(Path.home() / '.playlistgen' / 'mood_cache.sqlite'),
     }
 
-    config_path = Path(path) if path else Path.home() / '.playlistgen' / 'config.yml'
+    # Determine where to load the user config: explicit path, project-root config.yml, or home config
+    if path:
+        config_path = Path(path)
+    else:
+        cwd_cfg = Path('config.yml')
+        if cwd_cfg.exists():
+            config_path = cwd_cfg
+        else:
+            config_path = Path.home() / '.playlistgen' / 'config.yml'
     user_cfg = {}
     if yaml and config_path.exists():
         with open(config_path, 'r', encoding='utf-8') as f:
-            user_cfg = yaml.safe_load(f) or {}
+            try:
+                # Use PyYAML or ruamel.yaml safe_load if available
+                user_cfg = yaml.safe_load(f) or {}
+            except AttributeError:
+                # Fallback for ruamel.yaml without safe_load
+                try:
+                    from ruamel.yaml import YAML
+
+                    user_cfg = YAML(typ='safe', pure=True).load(f) or {}
+                except Exception:
+                    user_cfg = {}
 
     merged = {**defaults, **user_cfg}
 

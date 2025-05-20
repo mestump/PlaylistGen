@@ -13,3 +13,7 @@ mixes/
 tests/
 config.yml
 bulk-mood
+# Ignore personal cache and database files
+lastfm_tags_cache.json
+taste_profile.json
+mood_cache.sqlite*

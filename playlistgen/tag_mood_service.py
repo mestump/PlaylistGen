@@ -7,6 +7,8 @@ import logging
 import re
 import math
 import collections
+# Load config for API keys
+from .config import load_config
 
 try:
     import requests
@@ -35,9 +37,11 @@ MOODS = {
 PRIORITY = ["Happy","Sad","Chill","Energetic","Romantic","Epic","Dreamy","Groovy","Nostalgic"]
 
 # ---- Config / Cache ----
-CACHE_PATH = Path.home() / '.playlistgen' / 'lastfm_tags_cache.json'
-SHELVE_PATH = Path.home() / '.playlistgen' / 'lastfm_tag_shelve.db'
-API_KEY = os.getenv("LASTFM_API_KEY")  # or import from config
+_cfg = load_config()
+CACHE_PATH = Path(_cfg.get('TAG_MOOD_CACHE'))
+SHELVE_PATH = Path(_cfg.get('CACHE_DB'))
+# Last.fm API key: environment variable overrides config
+API_KEY = os.getenv("LASTFM_API_KEY") or load_config().get("LASTFM_API_KEY")
 
 def canonical_mood(tags, tag_counts=None):
     scores = collections.defaultdict(float)
@@ -63,7 +67,9 @@ def canonical_mood(tags, tag_counts=None):
 def fetch_lastfm_tags(artist, track, api_key, cache_db=None):
     """Returns a list of tags from Last.fm for (artist, track)."""
     if not api_key:
-        raise RuntimeError("LASTFM_API_KEY is not set in environment variables. Cannot fetch tags.")
+        raise RuntimeError(
+            "LASTFM_API_KEY is not set. Please set the environment variable or add it to config.yml"
+        )
     key = f"{artist.lower()} - {track.lower()}"
     if cache_db is not None:
         if key in cache_db:
@@ -93,14 +99,18 @@ def fetch_lastfm_tags(artist, track, api_key, cache_db=None):
             cache_db[key] = []
         return []
 
-def batch_tag_and_mood(track_list, api_key=API_KEY, out_json_path=CACHE_PATH, shelve_path=SHELVE_PATH):
+def batch_tag_and_mood(track_list, api_key=API_KEY, out_json_path=CACHE_PATH, shelve_path=None):
     """
     For each (artist, track) in track_list:
       - Look up cached tags, else pull from Last.fm
       - Map to mood (using canonical_mood)
       - Save results to disk as JSON and Shelve
     """
+    processed = 0
+    skipped = 0
     Path(out_json_path).parent.mkdir(parents=True, exist_ok=True)
+    if shelve_path is None:
+        shelve_path = SHELVE_PATH
     Path(shelve_path).parent.mkdir(parents=True, exist_ok=True)
 
     # Load existing progress if resuming
@@ -114,9 +124,13 @@ def batch_tag_and_mood(track_list, api_key=API_KEY, out_json_path=CACHE_PATH, sh
     with shelve.open(str(shelve_path)) as cache_db:
         for artist, track in tqdm(track_list, desc="Fetching tags/moods"):
             track_id = f"{artist} - {track}".strip().lower()
-            if track_id in mood_db:
-                continue  # already done
+            if track_id in mood_db and mood_db[track_id].get('mood') is not None:
+                logging.info(f"Skipping {artist} - {track}: mood already cached")
+                skipped += 1
+                continue
 
+            logging.info(f"Processing {artist} - {track}")
+            processed += 1
             tags = fetch_lastfm_tags(artist, track, api_key, cache_db)
             for t in tags:
                 tag_counts[t.lower()] += 1
@@ -133,6 +147,8 @@ def batch_tag_and_mood(track_list, api_key=API_KEY, out_json_path=CACHE_PATH, sh
         with open(out_json_path, "w", encoding="utf-8") as f:
             json.dump(mood_db, f, indent=2)
     logging.info(f"Done: {len(mood_db)} tracks written to {out_json_path}")
+    logging.info(f"Mood-tagged {processed} tracks; skipped {skipped} tracks")
+    return processed, skipped
 
 def load_tag_mood_db(path=CACHE_PATH):
     """Load the tag/mood cache if available, else return empty dict."""
@@ -147,6 +163,7 @@ def generate_tag_mood_cache(itunes_json_path, spotify_dir, tag_mood_path=CACHE_P
     Scan all tracks in the provided iTunes JSON and Spotify directory,
     fetch Last.fm tags for each, and save them to the mood/tag cache as JSON.
     """
+    Path(tag_mood_path).parent.mkdir(parents=True, exist_ok=True)
     tracks = []
     # Load all tracks from iTunes JSON
     if itunes_json_path and Path(itunes_json_path).exists():
@@ -173,7 +190,13 @@ def generate_tag_mood_cache(itunes_json_path, spotify_dir, tag_mood_path=CACHE_P
     tracks = list(set(tracks))  # deduplicate
 
     logging.info(f"Fetching tags for {len(tracks)} tracks. This can take a while...")
-    batch_tag_and_mood(tracks, api_key=API_KEY, out_json_path=tag_mood_path)
+    processed, skipped = batch_tag_and_mood(
+        tracks,
+        api_key=API_KEY,
+        out_json_path=tag_mood_path,
+        shelve_path=_cfg.get('CACHE_DB', None)
+    )
+    logging.info(f"Mood-tagged {processed} tracks; skipped {skipped} tracks")
 
     # Sanity check
     if Path(tag_mood_path).exists():
