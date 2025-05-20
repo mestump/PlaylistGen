@@ -135,3 +135,6 @@ pytest
 * For most users, just run `python -m playlistgen` to generate playlists after setup.
 
 ---
+
+This project is licensed under the Creative Commons Attribution-NonCommercial 4.0 International License.
+See LICENSE for details.
