@@ -74,31 +74,39 @@ def cluster_tracks(
             logging.warning("No mood-based clusters found — falling back to other clustering")
 
     if cluster_by_year:
-        if 'Year' not in df.columns or df['Year'].isnull().all():
-            df['Year'] = df.apply(extract_year, axis=1)
-
-        year_groups = []
-        if year_range and year_range > 0:
-            min_year = int(df['Year'].min())
-            max_year = int(df['Year'].max())
-            start = min_year
-            while start <= max_year:
-                end = start + year_range
-                group = df[(df['Year'] >= start) & (df['Year'] < end)]
-                if len(group) >= min_tracks_per_year:
-                    year_groups.append(group)
-                start += year_range
+        # Only attempt year-based clustering if at least one track yields a valid year
+        year_vals = (
+            df['Year']
+            if 'Year' in df.columns and df['Year'].notnull().any()
+            else df.apply(extract_year, axis=1)
+        )
+        if year_vals.notnull().any():
+            df['Year'] = year_vals
+            year_groups = []
+            if year_range and year_range > 0:
+                min_year = int(df['Year'].min())
+                max_year = int(df['Year'].max())
+                start = min_year
+                while start <= max_year:
+                    end = start + year_range
+                    group = df[(df['Year'] >= start) & (df['Year'] < end)]
+                    if len(group) >= min_tracks_per_year:
+                        year_groups.append(group)
+                    start += year_range
+            else:
+                for year, group in df.groupby('Year'):
+                    if len(group) >= min_tracks_per_year:
+                        year_groups.append(group)
+            if year_groups:
+                logging.info(
+                    f"Clustered into {len(year_groups)} year-based clusters: {[len(g) for g in year_groups]}"
+                )
+                return year_groups
+            logging.warning("No year-based clusters found — falling back to text/mood clustering")
         else:
-            for year, group in df.groupby('Year'):
-                if len(group) >= min_tracks_per_year:
-                    year_groups.append(group)
-
-        if year_groups:
-            logging.info(
-                f"Clustered into {len(year_groups)} year-based clusters: {[len(g) for g in year_groups]}"
+            logging.warning(
+                "YEAR_MIX_ENABLED but no valid Year data found — falling back to text/mood clustering"
             )
-            return year_groups
-        logging.warning("No year-based clusters found — falling back to text/mood clustering")
 
     if not SKLEARN_AVAILABLE:
         logging.warning(f"sklearn not available; using simple split clustering into {n_clusters} groups")

@@ -23,7 +23,7 @@ def load_config(path: str = None) -> dict:
         'OUTPUT_DIR': './mixes',
         'LASTFM_API_KEY': None,
         'CLUSTER_COUNT': 6,
-        'MAX_PER_ARTIST': 5,
+        'MAX_PER_ARTIST': 4,
         'TRACKS_PER_MIX': 50,
         'YEAR_MIX_ENABLED': True,
         'YEAR_MIX_RANGE': 1,

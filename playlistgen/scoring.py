@@ -95,6 +95,14 @@ def score_tracks(itunes_df: pd.DataFrame, config=None, tag_mood_db=None, weights
     if zero_score_count > len(itunes_df)*0.3:
         logging.warning('More than 30% of tracks scored as zero! Check tag/mood/genre mapping.')
 
+    # Ensure 'Mood' column is present and populated for all tracks
+    itunes_df['track_id'] = itunes_df.apply(get_track_id, axis=1)
+    itunes_df['Mood'] = (
+        itunes_df['track_id']
+        .map(lambda tid: tag_mood_db.get(tid, {}).get('mood'))
+        .fillna('Unknown')
+    )
+    itunes_df.drop(columns=['track_id'], inplace=True)
 
     return itunes_df
 
