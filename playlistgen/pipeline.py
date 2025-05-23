@@ -6,7 +6,7 @@ from .itunes import convert_itunes_xml, load_itunes_json
 from .tag_mood_service import generate_tag_mood_cache, load_tag_mood_db
 from .spotify_profile import build_profile, load_profile
 from .scoring import score_tracks
-from .clustering import cluster_tracks, name_cluster
+from .clustering import cluster_tracks, name_cluster, MOOD_ADJECTIVES
 from .playlist_builder import build_playlists
 
 
@@ -63,12 +63,32 @@ def run_pipeline(cfg, genre=None, mood=None):
             logging.warning(f"No tracks found matching genre={genre!r} mood={mood!r}")
             return
 
-        parts = []
+        label_mood_adj = None
+        label_genre_name = None
+
         if mood:
-            parts.append(mood)
+            mood_lower = mood.lower()
+            adj_found = False
+            for k, v in MOOD_ADJECTIVES.items():
+                if k.lower() == mood_lower:
+                    label_mood_adj = v
+                    adj_found = True
+                    break
+            if not adj_found:
+                label_mood_adj = mood.capitalize()
+        
         if genre:
-            parts.append(genre)
-        label = " & ".join(parts) + " Mix"
+            label_genre_name = genre.capitalize()
+
+        if label_mood_adj and label_genre_name:
+            label = f"{label_mood_adj} {label_genre_name} Mix"
+        elif label_genre_name:
+            label = f"{label_genre_name} Mix"
+        elif label_mood_adj:
+            label = f"{label_mood_adj} Mix"
+        else:
+            label = "Filtered Mix" # Should not be reached if mood or genre is present
+
         build_playlists([filt_df], scored_df, name_fn=lambda *_: label)
         return
 

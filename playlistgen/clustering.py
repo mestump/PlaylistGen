@@ -13,20 +13,70 @@ try:
 except ImportError:
     HDBSCAN_AVAILABLE = False
 
+MOOD_ADJECTIVES = {
+    "Sad": "Melancholic",
+    "Happy": "Joyful",
+    "Angry": "Intense",
+    "Calm": "Serene",
+    "Energetic": "Upbeat",
+    "Chill": "Relaxed",
+    "Dark": "Somber",
+    "Romantic": "Romantic",
+    "Sentimental": "Nostalgic",
+    "Aggressive": "Aggressive",
+    "Peaceful": "Peaceful",
+    "Yearning": "Yearning",
+    "Sensual": "Sensual",
+    "Stirring": "Stirring",
+    "Rowdy": "Rowdy",
+    "Brooding": "Brooding",
+    "Sophisticated": "Sophisticated",
+    "Fiery": "Fiery",
+    "Cool": "Cool",
+    "Gritty": "Gritty",
+    "Urgent": "Urgent",
+    "Spacey": "Ethereal",
+    "Melancholy": "Melancholic",
+    "Bittersweet": "Bittersweet",
+    "Dreamy": "Dreamy",
+    "Excited": "Excited",
+}
+
 def name_cluster(df=None, i=None):
     """
     Generate a descriptive name for a cluster based on its top mood and genre.
     """
-    parts = []
+    top_mood_original = None
+    mood_adjective = None
+    top_genre_original = None
+    top_genre = None
+
     if df is not None:
         if 'Mood' in df.columns and df['Mood'].notnull().any():
-            top_mood = df['Mood'].mode().iloc[0]
-            parts.append(top_mood)
+            # Get the most frequent mood, handling potential ties by taking the first
+            top_mood_original = df['Mood'].mode().iloc[0] if not df['Mood'].mode().empty else None
+            if top_mood_original:
+                # Case-insensitive lookup for mood adjective
+                for k, v in MOOD_ADJECTIVES.items():
+                    if k.lower() == top_mood_original.lower():
+                        mood_adjective = v
+                        break
+                if not mood_adjective: # If no adjective found, use the original mood, capitalized
+                    mood_adjective = top_mood_original.capitalize()
+        
         if 'Genre' in df.columns and df['Genre'].notnull().any():
-            top_genre = df['Genre'].mode().iloc[0]
-            parts.append(top_genre)
-    if parts:
-        return ' & '.join(parts) + ' Mix'
+            # Get the most frequent genre, handling potential ties by taking the first
+            top_genre_original = df['Genre'].mode().iloc[0] if not df['Genre'].mode().empty else None
+            if top_genre_original:
+                top_genre = top_genre_original.capitalize()
+
+    if mood_adjective and top_genre:
+        return f"{mood_adjective} {top_genre} Mix"
+    elif top_genre:
+        return f"{top_genre} Mix"
+    elif mood_adjective:
+        return f"{mood_adjective} Mix"
+    
     if i is not None:
         return f"Cluster {i + 1}"
     return "Cluster"
