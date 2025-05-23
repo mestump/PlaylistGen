@@ -4,6 +4,7 @@ PyYAML>=5.1
 requests>=2.0
 tqdm>=4.0
 scikit-learn>=0.24
+mutagen>=1.45.1
 
 # Testing dependencies
 pytest>=6.0

@@ -7,6 +7,7 @@ import logging
 import re
 import math
 import collections
+import pandas as pd # Ensured pandas is imported
 # Load config for API keys
 from .config import load_config
 
@@ -18,7 +19,7 @@ except ImportError:
 try:
     from tqdm import tqdm
 except ImportError:
-    def tqdm(iterable, **kwargs):
+    def tqdm(iterable, **kwargs): # type: ignore
         return iterable
 
 # ---- Mood Heuristic Mapping ----
@@ -82,6 +83,7 @@ def fetch_lastfm_tags(artist, track, api_key, cache_db=None):
     )
     try:
         resp = requests.get(url, timeout=5)
+        resp.raise_for_status() # Raise an exception for HTTP errors
         tags = []
         data = resp.json()
         for tag in data.get("toptags", {}).get("tag", []):
@@ -93,11 +95,22 @@ def fetch_lastfm_tags(artist, track, api_key, cache_db=None):
         # Optional throttling:
         # time.sleep(0.1)
         return tags
-    except Exception:
-        logging.exception(f"Failed to fetch Last.fm tags for {artist} - {track}")
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Request failed for Last.fm tags for {artist} - {track}: {e}")
+        if cache_db is not None:
+            cache_db[key] = [] # Cache empty list on failure to avoid retrying constantly
+        return []
+    except json.JSONDecodeError as e:
+        logging.error(f"JSON decode failed for Last.fm tags for {artist} - {track}: {e}. Response text: {resp.text[:200] if resp else 'No response'}")
         if cache_db is not None:
             cache_db[key] = []
         return []
+    except Exception: # Catch any other unexpected errors
+        logging.exception(f"Unexpected error fetching Last.fm tags for {artist} - {track}")
+        if cache_db is not None:
+            cache_db[key] = []
+        return []
+
 
 def batch_tag_and_mood(track_list, api_key=API_KEY, out_json_path=CACHE_PATH, shelve_path=None):
     """
@@ -108,46 +121,70 @@ def batch_tag_and_mood(track_list, api_key=API_KEY, out_json_path=CACHE_PATH, sh
     """
     processed = 0
     skipped = 0
-    Path(out_json_path).parent.mkdir(parents=True, exist_ok=True)
+    
+    output_p = Path(out_json_path) # Use Path object
+    output_p.parent.mkdir(parents=True, exist_ok=True)
+
     if shelve_path is None:
-        shelve_path = SHELVE_PATH
-    Path(shelve_path).parent.mkdir(parents=True, exist_ok=True)
+        shelve_p = SHELVE_PATH
+    else:
+        shelve_p = Path(shelve_path)
+    shelve_p.parent.mkdir(parents=True, exist_ok=True)
 
     # Load existing progress if resuming
-    if Path(out_json_path).exists():
-        with open(out_json_path, "r", encoding="utf-8") as f:
-            mood_db = json.load(f)
+    if output_p.exists():
+        try:
+            with open(output_p, "r", encoding="utf-8") as f:
+                mood_db = json.load(f)
+        except json.JSONDecodeError:
+            logging.error(f"Could not decode existing mood cache at {output_p}. Starting fresh.")
+            mood_db = {}
     else:
         mood_db = {}
 
     tag_counts = collections.Counter()
-    with shelve.open(str(shelve_path)) as cache_db:
+    with shelve.open(str(shelve_p)) as cache_db: # Ensure shelve path is string
         for artist, track in tqdm(track_list, desc="Fetching tags/moods"):
-            track_id = f"{artist} - {track}".strip().lower()
+            artist_str = str(artist) if artist is not None else ""
+            track_str = str(track) if track is not None else ""
+            
+            if not artist_str or not track_str:
+                logging.warning(f"Skipping track with missing artist or name: Artist='{artist_str}', Track='{track_str}'")
+                skipped +=1
+                continue
+
+            track_id = f"{artist_str} - {track_str}".strip().lower()
+            # Check if mood specifically is already cached, not just if track_id exists with potentially no mood
             if track_id in mood_db and mood_db[track_id].get('mood') is not None:
-                logging.info(f"Skipping {artist} - {track}: mood already cached")
+                logging.debug(f"Skipping {artist_str} - {track_str}: mood already cached")
                 skipped += 1
                 continue
 
-            logging.info(f"Processing {artist} - {track}")
+            logging.debug(f"Processing {artist_str} - {track_str}")
             processed += 1
-            tags = fetch_lastfm_tags(artist, track, api_key, cache_db)
+            tags = fetch_lastfm_tags(artist_str, track_str, api_key, cache_db)
             for t in tags:
                 tag_counts[t.lower()] += 1
 
             mood = canonical_mood(tags, tag_counts)
             mood_db[track_id] = {"tags": tags, "mood": mood}
 
-            # Save every 100 items for crash-resume
-            if len(mood_db) % 100 == 0:
-                with open(out_json_path, "w", encoding="utf-8") as f:
-                    json.dump(mood_db, f, indent=2)
+            if processed > 0 and processed % 100 == 0:
+                try:
+                    with open(output_p, "w", encoding="utf-8") as f:
+                        json.dump(mood_db, f, indent=2)
+                except Exception as e:
+                    logging.error(f"Error saving intermediate mood_db to {output_p}: {e}")
 
-        # Save once more at the end
-        with open(out_json_path, "w", encoding="utf-8") as f:
-            json.dump(mood_db, f, indent=2)
-    logging.info(f"Done: {len(mood_db)} tracks written to {out_json_path}")
-    logging.info(f"Mood-tagged {processed} tracks; skipped {skipped} tracks")
+
+        try:
+            with open(output_p, "w", encoding="utf-8") as f:
+                json.dump(mood_db, f, indent=2)
+        except Exception as e:
+            logging.error(f"Error saving final mood_db to {output_p}: {e}")
+            
+    logging.info(f"Done: {len(mood_db)} tracks written to {output_p}")
+    logging.info(f"Mood-tagged {processed} tracks; skipped {skipped} tracks (already cached or missing data)")
     return processed, skipped
 
 def load_tag_mood_db(path=CACHE_PATH):
@@ -155,55 +192,96 @@ def load_tag_mood_db(path=CACHE_PATH):
     p = Path(path)
     if not p.exists():
         return {}
-    with open(p, "r", encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except json.JSONDecodeError:
+        logging.error(f"Could not decode mood cache at {p}. Returning empty DB.")
+        return {}
 
-def generate_tag_mood_cache(itunes_json_path, spotify_dir, tag_mood_path=CACHE_PATH):
+# Signature changed as per instructions
+def generate_tag_mood_cache(tracks_df: pd.DataFrame, spotify_data_dir_str: str, output_path_str: str):
     """
-    Scan all tracks in the provided iTunes JSON and Spotify directory,
+    Scan all tracks in the provided DataFrame and Spotify directory,
     fetch Last.fm tags for each, and save them to the mood/tag cache as JSON.
     """
-    Path(tag_mood_path).parent.mkdir(parents=True, exist_ok=True)
-    tracks = []
-    # Load all tracks from iTunes JSON
-    if itunes_json_path and Path(itunes_json_path).exists():
-        with open(itunes_json_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        for t in data.get('tracks', []):
-            artist = t.get('Artist')
-            name = t.get('Name')
-            if artist and name:
-                tracks.append((artist, name))
+    output_p = Path(output_path_str) # Use Path object
+    output_p.parent.mkdir(parents=True, exist_ok=True)
+    
+    tracks_for_batch = []
+
+    # Use tracks_df to prepare tracks_for_batch
+    if tracks_df is None or tracks_df.empty:
+        logging.warning("Received empty or None DataFrame for mood tagging from primary source.")
+        # tracks_for_batch remains empty
+    else:
+        if 'Artist' not in tracks_df.columns or 'Name' not in tracks_df.columns:
+            logging.error("Tracks DataFrame is missing 'Artist' or 'Name' columns for mood tagging.")
+            # tracks_for_batch remains empty if essential columns are missing
+        else:
+            # Create a working copy for modification if necessary
+            temp_df = tracks_df[['Artist', 'Name']].copy()
+            temp_df.dropna(subset=['Artist', 'Name'], inplace=True)
+            # Convert to list of tuples, ensuring values are strings
+            tracks_for_batch.extend([
+                (str(artist), str(name)) for artist, name in temp_df.to_numpy()
+            ])
 
     # Add all tracks from Spotify play history
-    if spotify_dir:
-        from glob import glob
-        import os
-        for file in glob(os.path.join(spotify_dir, "*.json")):
-            with open(file, "r", encoding="utf-8") as f:
-                for entry in json.load(f):
-                    artist = entry.get('master_metadata_album_artist_name')
-                    title = entry.get('master_metadata_track_name')
-                    if artist and title:
-                        tracks.append((artist, title))
+    if spotify_data_dir_str: # Check if the string path is provided
+        spotify_path = Path(spotify_data_dir_str)
+        if spotify_path.exists() and spotify_path.is_dir():
+            from glob import glob # Keep import local if only used here
+            # import os # os is already imported globally
+            logging.info(f"Scanning Spotify data in: {spotify_path}")
+            for file_path_str in glob(os.path.join(spotify_data_dir_str, "*.json")):
+                try:
+                    with open(file_path_str, "r", encoding="utf-8") as f:
+                        spotify_entries = json.load(f)
+                        for entry in spotify_entries:
+                            artist = entry.get('master_metadata_album_artist_name')
+                            title = entry.get('master_metadata_track_name')
+                            if artist and title:
+                                tracks_for_batch.append((str(artist), str(title)))
+                except json.JSONDecodeError:
+                    logging.error(f"Could not decode JSON from Spotify file: {file_path_str}")
+                except Exception as e:
+                    logging.error(f"Error processing Spotify file {file_path_str}: {e}")
+        else:
+            logging.warning(f"Spotify data directory not found or is not a directory: {spotify_data_dir_str}")
+    
+    if not tracks_for_batch:
+        logging.warning("No tracks found from any source to process for mood tagging.")
+        # Create an empty cache file to signify completion with no data
+        try:
+            with open(output_p, "w", encoding="utf-8") as f:
+                json.dump({}, f)
+        except Exception as e:
+            logging.error(f"Could not write empty cache file to {output_p}: {e}")
+        return
 
-    tracks = list(set(tracks))  # deduplicate
+    # Deduplicate tracks_for_batch
+    tracks_for_batch = sorted(list(set(tracks_for_batch)))
 
-    logging.info(f"Fetching tags for {len(tracks)} tracks. This can take a while...")
+    logging.info(f"Fetching tags for {len(tracks_for_batch)} unique tracks. This can take a while...")
     processed, skipped = batch_tag_and_mood(
-        tracks,
+        tracks_for_batch,
         api_key=API_KEY,
-        out_json_path=tag_mood_path,
-        shelve_path=_cfg.get('CACHE_DB', None)
+        out_json_path=output_p, # Use Path object
+        shelve_path=_cfg.get('CACHE_DB', None) # Allow config to specify shelve path
     )
-    logging.info(f"Mood-tagged {processed} tracks; skipped {skipped} tracks")
+    logging.info(f"Mood-tagged {processed} tracks; skipped {skipped} tracks from batch.")
 
     # Sanity check
-    if Path(tag_mood_path).exists():
-        with open(tag_mood_path, "r", encoding="utf-8") as f:
-            tag_db = json.load(f)
-        logging.info(f"Tag DB now contains {len(tag_db)} tracks. Example entry: {next(iter(tag_db.items())) if tag_db else 'None'}")
+    if output_p.exists():
+        try:
+            with open(output_p, "r", encoding="utf-8") as f:
+                tag_db = json.load(f)
+            logging.info(f"Tag DB now contains {len(tag_db)} tracks. Example entry: {next(iter(tag_db.items())) if tag_db else 'None'}")
+        except json.JSONDecodeError:
+            logging.error(f"Could not decode final mood cache at {output_p} for sanity check.")
+        except Exception as e:
+            logging.error(f"Error during sanity check of {output_p}: {e}")
+
     else:
-        logging.error(f"Tag mood DB file {tag_mood_path} was NOT written!")
-
-
+        logging.error(f"Tag mood DB file {output_p} was NOT written!")

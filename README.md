@@ -59,6 +59,7 @@ Main options:
 * `--log-level`: Set log level (DEBUG, INFO, etc)
 * `--genre`: Filter mix to only tracks matching the given genre
 * `--mood`: Filter mix to only tracks matching the given mood
+* `--library-path PATH`: Specify the root directory of your local music library (EXPERIMENTAL - CURRENTLY NON-FUNCTIONAL).
 
 Example:
 
