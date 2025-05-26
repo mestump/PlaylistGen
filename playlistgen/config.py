@@ -33,6 +33,7 @@ def load_config(path: str = None) -> dict:
         # Add this line to set a default mood cache path
         'TAG_MOOD_CACHE': str(Path.home() / '.playlistgen' / 'lastfm_tags_cache.json'),
         'CACHE_DB': str(Path.home() / '.playlistgen' / 'mood_cache.sqlite'),
+        'LIBRARY_INPUT_PATH': None, # Added new key for library input path
     }
 
     # Determine where to load the user config: explicit path, project-root config.yml, or home config
