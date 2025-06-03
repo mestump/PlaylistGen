@@ -7,6 +7,7 @@ import logging
 import re
 import math
 import collections
+
 # Load config for API keys
 from .config import load_config
 
@@ -18,30 +19,43 @@ except ImportError:
 try:
     from tqdm import tqdm
 except ImportError:
+
     def tqdm(iterable, **kwargs):
         return iterable
 
+
 # ---- Mood Heuristic Mapping ----
 MOODS = {
-    "Happy":      ["happy", "feel good", "cheerful", "uplifting", "good mood"],
-    "Sad":        ["sad", "melancholy", "melancholic", "heartbreak", "somber"],
-    "Angry":      ["angry", "aggressive", "fierce", "rage"],
-    "Chill":      ["chill", "chillout", "mellow", "laid back", "relax", "soothing", "calm"],
-    "Energetic":  ["energetic", "high energy", "party", "dance", "upbeat", "fast"],
-    "Romantic":   ["romantic", "love song", "ballad"],
-    "Epic":       ["epic", "anthemic", "dramatic", "orchestral"],
-    "Dreamy":     ["dreamy", "ethereal", "ambient", "spacey"],
-    "Groovy":     ["groovy", "funky", "swing"],
-    "Nostalgic":  ["nostalgia", "retro", "oldies", "classic"],
+    "Happy": ["happy", "feel good", "cheerful", "uplifting", "good mood"],
+    "Sad": ["sad", "melancholy", "melancholic", "heartbreak", "somber"],
+    "Angry": ["angry", "aggressive", "fierce", "rage"],
+    "Chill": ["chill", "chillout", "mellow", "laid back", "relax", "soothing", "calm"],
+    "Energetic": ["energetic", "high energy", "party", "dance", "upbeat", "fast"],
+    "Romantic": ["romantic", "love song", "ballad"],
+    "Epic": ["epic", "anthemic", "dramatic", "orchestral"],
+    "Dreamy": ["dreamy", "ethereal", "ambient", "spacey"],
+    "Groovy": ["groovy", "funky", "swing"],
+    "Nostalgic": ["nostalgia", "retro", "oldies", "classic"],
 }
-PRIORITY = ["Happy","Sad","Chill","Energetic","Romantic","Epic","Dreamy","Groovy","Nostalgic"]
+PRIORITY = [
+    "Happy",
+    "Sad",
+    "Chill",
+    "Energetic",
+    "Romantic",
+    "Epic",
+    "Dreamy",
+    "Groovy",
+    "Nostalgic",
+]
 
 # ---- Config / Cache ----
 _cfg = load_config()
-CACHE_PATH = Path(_cfg.get('TAG_MOOD_CACHE'))
-SHELVE_PATH = Path(_cfg.get('CACHE_DB'))
+CACHE_PATH = Path(_cfg.get("TAG_MOOD_CACHE"))
+SHELVE_PATH = Path(_cfg.get("CACHE_DB"))
 # Last.fm API key: environment variable overrides config
 API_KEY = os.getenv("LASTFM_API_KEY") or load_config().get("LASTFM_API_KEY")
+
 
 def canonical_mood(tags, tag_counts=None):
     scores = collections.defaultdict(float)
@@ -60,9 +74,13 @@ def canonical_mood(tags, tag_counts=None):
                             weight = 1.0 / math.log10(count)
                     scores[mood] += weight
     if scores:
-        best = max(scores, key=lambda m: (scores[m], -PRIORITY.index(m) if m in PRIORITY else 99))
+        best = max(
+            scores,
+            key=lambda m: (scores[m], -PRIORITY.index(m) if m in PRIORITY else 99),
+        )
         return best
     return None
+
 
 def fetch_lastfm_tags(artist, track, api_key, cache_db=None):
     """Returns a list of tags from Last.fm for (artist, track)."""
@@ -99,7 +117,10 @@ def fetch_lastfm_tags(artist, track, api_key, cache_db=None):
             cache_db[key] = []
         return []
 
-def batch_tag_and_mood(track_list, api_key=API_KEY, out_json_path=CACHE_PATH, shelve_path=None):
+
+def batch_tag_and_mood(
+    track_list, api_key=API_KEY, out_json_path=CACHE_PATH, shelve_path=None
+):
     """
     For each (artist, track) in track_list:
       - Look up cached tags, else pull from Last.fm
@@ -124,7 +145,7 @@ def batch_tag_and_mood(track_list, api_key=API_KEY, out_json_path=CACHE_PATH, sh
     with shelve.open(str(shelve_path)) as cache_db:
         for artist, track in tqdm(track_list, desc="Fetching tags/moods"):
             track_id = f"{artist} - {track}".strip().lower()
-            if track_id in mood_db and mood_db[track_id].get('mood') is not None:
+            if track_id in mood_db and mood_db[track_id].get("mood") is not None:
                 logging.info(f"Skipping {artist} - {track}: mood already cached")
                 skipped += 1
                 continue
@@ -150,6 +171,7 @@ def batch_tag_and_mood(track_list, api_key=API_KEY, out_json_path=CACHE_PATH, sh
     logging.info(f"Mood-tagged {processed} tracks; skipped {skipped} tracks")
     return processed, skipped
 
+
 def load_tag_mood_db(path=CACHE_PATH):
     """Load the tag/mood cache if available, else return empty dict."""
     p = Path(path)
@@ -157,6 +179,7 @@ def load_tag_mood_db(path=CACHE_PATH):
         return {}
     with open(p, "r", encoding="utf-8") as f:
         return json.load(f)
+
 
 def generate_tag_mood_cache(itunes_json_path, spotify_dir, tag_mood_path=CACHE_PATH):
     """
@@ -169,9 +192,9 @@ def generate_tag_mood_cache(itunes_json_path, spotify_dir, tag_mood_path=CACHE_P
     if itunes_json_path and Path(itunes_json_path).exists():
         with open(itunes_json_path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        for t in data.get('tracks', []):
-            artist = t.get('Artist')
-            name = t.get('Name')
+        for t in data.get("tracks", []):
+            artist = t.get("Artist")
+            name = t.get("Name")
             if artist and name:
                 tracks.append((artist, name))
 
@@ -179,11 +202,12 @@ def generate_tag_mood_cache(itunes_json_path, spotify_dir, tag_mood_path=CACHE_P
     if spotify_dir:
         from glob import glob
         import os
+
         for file in glob(os.path.join(spotify_dir, "*.json")):
             with open(file, "r", encoding="utf-8") as f:
                 for entry in json.load(f):
-                    artist = entry.get('master_metadata_album_artist_name')
-                    title = entry.get('master_metadata_track_name')
+                    artist = entry.get("master_metadata_album_artist_name")
+                    title = entry.get("master_metadata_track_name")
                     if artist and title:
                         tracks.append((artist, title))
 
@@ -194,7 +218,7 @@ def generate_tag_mood_cache(itunes_json_path, spotify_dir, tag_mood_path=CACHE_P
         tracks,
         api_key=API_KEY,
         out_json_path=tag_mood_path,
-        shelve_path=_cfg.get('CACHE_DB', None)
+        shelve_path=_cfg.get("CACHE_DB", None),
     )
     logging.info(f"Mood-tagged {processed} tracks; skipped {skipped} tracks")
 
@@ -202,8 +226,8 @@ def generate_tag_mood_cache(itunes_json_path, spotify_dir, tag_mood_path=CACHE_P
     if Path(tag_mood_path).exists():
         with open(tag_mood_path, "r", encoding="utf-8") as f:
             tag_db = json.load(f)
-        logging.info(f"Tag DB now contains {len(tag_db)} tracks. Example entry: {next(iter(tag_db.items())) if tag_db else 'None'}")
+        logging.info(
+            f"Tag DB now contains {len(tag_db)} tracks. Example entry: {next(iter(tag_db.items())) if tag_db else 'None'}"
+        )
     else:
         logging.error(f"Tag mood DB file {tag_mood_path} was NOT written!")
-
-
