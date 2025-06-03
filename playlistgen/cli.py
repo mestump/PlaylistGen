@@ -30,6 +30,10 @@ def main():
     parser.add_argument(
         "--mood", help="Filter mix to only tracks matching the given mood"
     )
+    parser.add_argument(
+        "--library-dir",
+        help="Path to a manual music library directory (used if no iTunes library)",
+    )
     subparsers = parser.add_subparsers(dest="command")
 
     subparsers.add_parser("recache-moods", help="Force re-cache all moods from Last.fm")
@@ -53,7 +57,9 @@ def main():
 
         ensure_tag_mood_cache(cfg, itunes_json)
     else:
-        run_pipeline(cfg, genre=args.genre, mood=args.mood)
+        run_pipeline(
+            cfg, genre=args.genre, mood=args.mood, library_dir=args.library_dir
+        )
 
 
 if __name__ == "__main__":

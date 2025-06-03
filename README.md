@@ -16,6 +16,7 @@ A command-line Python tool for generating smart, mood-aware, Daily-Mix style pla
 * 🧩 **Fallback back-fill logic to meet playlist length**
 * 📂 **M3U playlist generation with intelligent naming**
 * 💿 **Optional Year-based mix generation**
+* 📁 **Manual library scanning with `--library-dir` flag**
 
 ---
 
@@ -33,6 +34,8 @@ A command-line Python tool for generating smart, mood-aware, Daily-Mix style pla
 1. Open iTunes (or Music app on macOS).
 2. Go to `File` → `Library` → `Export Library`.
 3. Save the exported XML file (e.g., `iTunes Music Library.xml`) in the root folder.
+
+If you manage your music files manually and don't use iTunes, skip the steps above and run the tool with `--library-dir /path/to/music`.
 
 ### Export your Spotify History
 
@@ -59,6 +62,7 @@ Main options:
 * `--log-level`: Set log level (DEBUG, INFO, etc)
 * `--genre`: Filter mix to only tracks matching the given genre
 * `--mood`: Filter mix to only tracks matching the given mood
+* `--library-dir`: Scan a manual music directory instead of an iTunes library
 
 Example:
 

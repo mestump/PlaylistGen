@@ -2,7 +2,12 @@
 
 import logging
 from pathlib import Path
-from .itunes import convert_itunes_xml, load_itunes_json
+from .itunes import (
+    convert_itunes_xml,
+    load_itunes_json,
+    build_library_from_dir,
+    save_itunes_json,
+)
 from .tag_mood_service import generate_tag_mood_cache, load_tag_mood_db
 from .spotify_profile import build_profile, load_profile
 from .scoring import score_tracks
@@ -35,15 +40,22 @@ def generate_profile(cfg, tag_mood_path):
     build_profile(spotify_dir, tag_mood_path=tag_mood_path)
 
 
-def run_pipeline(cfg, genre=None, mood=None):
+def run_pipeline(cfg, genre=None, mood=None, library_dir=None):
     logging.basicConfig(level=logging.INFO)
     logging.info("Starting playlist generation pipeline")
 
-    itunes_json = ensure_itunes_json(cfg)
+    if library_dir:
+        logging.info(f"Scanning library directory: {library_dir}")
+        df = build_library_from_dir(library_dir)
+        itunes_json = Path(cfg["ITUNES_JSON"])
+        save_itunes_json(df, itunes_json)
+    else:
+        itunes_json = ensure_itunes_json(cfg)
+
     tag_mood_path = ensure_tag_mood_cache(cfg, itunes_json)
     generate_profile(cfg, tag_mood_path)
 
-    itunes_df = load_itunes_json(str(itunes_json))
+    itunes_df = df if library_dir else load_itunes_json(str(itunes_json))
     tag_mood_db = load_tag_mood_db(str(tag_mood_path))
     profile = load_profile(cfg["PROFILE_PATH"])
 
