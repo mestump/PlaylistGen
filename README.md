@@ -93,6 +93,7 @@ MAX_PER_ARTIST: 5
 TRACKS_PER_MIX: 50
 YEAR_MIX_ENABLED: true
 YEAR_MIX_RANGE: 1
+CACHE_DB: ~/.playlistgen/mood_cache.sqlite
 ```
 
 To use online genre/mood detection, set your **Last.fm API key** in the config.
