@@ -123,6 +123,20 @@ To use online genre/mood detection, set your **Last.fm API key** in the config.
 
 ---
 
+### Train Playlist Clustering Model
+
+Use the provided script to scrape playlists from Spotify and build a model for
+scoring candidates later:
+
+```bash
+python -m playlistgen.train_model "rock" --limit 20 --output model.joblib
+```
+
+The script reads Spotify credentials from command line options or the
+`SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET` environment variables.
+
+---
+
 ## 🧪 Development & Testing
 
 Run tests with:
