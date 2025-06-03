@@ -1,4 +1,5 @@
 """Genre lookup Service"""
+
 from pathlib import Path
 import shelve
 import requests
@@ -7,7 +8,7 @@ from .config import load_config
 from typing import Optional
 
 # Cache file for genres
-CACHE_PATH = Path.home() / '.playlistgen' / 'genre_cache.db'
+CACHE_PATH = Path.home() / ".playlistgen" / "genre_cache.db"
 
 
 def fetch_genre_online(artist: str, track: str):
@@ -16,7 +17,7 @@ def fetch_genre_online(artist: str, track: str):
     Returns a list of tag strings, or [] if none.
     """
     cfg = load_config()
-    api_key = cfg.get('LASTFM_API_KEY')
+    api_key = cfg.get("LASTFM_API_KEY")
     if not api_key:
         raise ValueError(
             "LASTFM_API_KEY is not set. Please set the environment variable or add it to config.yml"
@@ -39,12 +40,14 @@ def fetch_genre_online(artist: str, track: str):
         try:
             resp = requests.get(url, timeout=5)
             data = resp.json()
-            tags = data.get('toptags', {}).get('tag', [])
-            tag_list = [t['name'] for t in tags]
+            tags = data.get("toptags", {}).get("tag", [])
+            tag_list = [t["name"] for t in tags]
         except Exception:
             tag_list = []
 
         db[key] = tag_list
         return tag_list
+
+
 # For compatibility
 fetch_genre = fetch_genre_online
