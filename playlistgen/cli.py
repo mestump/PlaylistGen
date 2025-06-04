@@ -74,10 +74,14 @@ def main():
         build_seed_playlist(
             args.song, cfg=cfg, library_dir=args.library_dir, limit=args.num
         )
-    else:
-        run_pipeline(
-            cfg, genre=args.genre, mood=args.mood, library_dir=args.library_dir
+
+    elif args.command is None and (args.genre or args.mood or args.library_dir):
+
         )
+    else:
+        from .gui import run_gui
+
+        run_gui()
 
 
 if __name__ == "__main__":

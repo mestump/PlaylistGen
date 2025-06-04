@@ -3,7 +3,7 @@ import json
 import time
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from tqdm import tqdm
+from .utils import progress_bar
 import requests
 
 # -------------------
@@ -109,15 +109,15 @@ def bulk_fetch_tags(
     completed = 0
     with ThreadPoolExecutor(max_workers=concurrency) as executor:
         futures = {executor.submit(worker, pair): pair for pair in to_process}
-        for future in tqdm(
-            as_completed(futures), total=len(futures), desc="Fetching tags"
+        for future in progress_bar(
+            as_completed(futures), desc="Fetching tags", total=len(futures)
         ):
             key, tags = future.result()
             cache[key] = tags
             completed += 1
             if completed % save_every == 0:
                 save_cache(cache, cache_path)
-                tqdm.write(f"Checkpoint: {completed} lookups saved.")
+                print(f"Checkpoint: {completed} lookups saved.")
 
     save_cache(cache, cache_path)
     print("Done! Total tracks cached:", len(cache))
