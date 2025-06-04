@@ -11,7 +11,7 @@ from .itunes import (
 from .tag_mood_service import generate_tag_mood_cache, load_tag_mood_db
 from .spotify_profile import build_profile, load_profile
 from .scoring import score_tracks
-from .clustering import cluster_tracks, name_cluster
+from .clustering import cluster_tracks, name_cluster, humanize_label
 from .playlist_builder import build_playlists
 
 
@@ -80,12 +80,7 @@ def run_pipeline(cfg, genre=None, mood=None, library_dir=None):
             logging.warning(f"No tracks found matching genre={genre!r} mood={mood!r}")
             return
 
-        parts = []
-        if mood:
-            parts.append(mood)
-        if genre:
-            parts.append(genre)
-        label = " & ".join(parts) + " Mix"
+        label = humanize_label(mood, genre)
         build_playlists([filt_df], scored_df, name_fn=lambda *_: label)
         return
 

@@ -41,7 +41,7 @@ def spotify_login(cfg: dict) -> None:
             client_id=cfg.get("SPOTIFY_CLIENT_ID"),
             client_secret=cfg.get("SPOTIFY_CLIENT_SECRET"),
             scope="playlist-modify-private",
-            redirect_uri="http://localhost:8888/callback",
+            redirect_uri=cfg.get("SPOTIFY_REDIRECT_URI", "http://localhost:8888/callback"),
         )
         token = auth.get_access_token(as_dict=False)
         cfg["SPOTIFY_TOKEN"] = token
