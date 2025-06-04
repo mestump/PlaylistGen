@@ -74,9 +74,9 @@ def main():
         build_seed_playlist(
             args.song, cfg=cfg, library_dir=args.library_dir, limit=args.num
         )
+
     elif args.command is None and (args.genre or args.mood or args.library_dir):
-        run_pipeline(
-            cfg, genre=args.genre, mood=args.mood, library_dir=args.library_dir
+
         )
     else:
         from .gui import run_gui

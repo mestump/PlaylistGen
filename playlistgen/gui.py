@@ -1,11 +1,14 @@
 """Interactive CLI-based GUI using questionary."""
 
+
 import logging
 import questionary
 
 from .config import load_config, save_config
+
 from .pipeline import run_pipeline
 from .seed_playlist import build_seed_playlist
+
 
 
 def edit_tokens(cfg: dict) -> None:
@@ -64,6 +67,7 @@ def run_gui():
     action = questionary.select(
         "Select an action",
         choices=[
+
             "Random mix",
             "Filter by mood",
             "Filter by genre",
@@ -72,9 +76,14 @@ def run_gui():
             "Set API tokens",
             "Spotify login",
             "Edit config",
+            "Generate mix",
+            "Generate from seed song",
+            "Recache moods",
+
             "Exit",
         ],
     ).ask()
+
 
     if action == "Random mix":
         run_pipeline(cfg)
@@ -89,14 +98,32 @@ def run_gui():
         num = questionary.text("Number of tracks", default="20").ask()
         build_seed_playlist(song, cfg=cfg, limit=int(num))
     elif action == "Force recache":
+
+    if action == "Generate mix":
+        genre = questionary.text(
+            "Genre filter (leave blank for none)"
+        ).ask()
+        mood = questionary.text(
+            "Mood filter (leave blank for none)"
+        ).ask()
+        run_pipeline(cfg, genre=genre or None, mood=mood or None)
+    elif action == "Generate from seed song":
+        song = questionary.text("Seed song 'Artist - Title'").ask()
+        num = questionary.text("Number of tracks", default="20").ask()
+        build_seed_playlist(song, cfg=cfg, limit=int(num))
+    elif action == "Recache moods":
+
         from .pipeline import ensure_itunes_json, ensure_tag_mood_cache
 
         itunes_json = ensure_itunes_json(cfg)
         ensure_tag_mood_cache(cfg, itunes_json)
+
     elif action == "Set API tokens":
         edit_tokens(cfg)
     elif action == "Spotify login":
         spotify_login(cfg)
     elif action == "Edit config":
         edit_config(cfg)
+=======
+
     return action
