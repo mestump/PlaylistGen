@@ -56,7 +56,10 @@ Or, if installed as a script:
 playlistgen
 ```
 
-Main options:
+Running without arguments now launches an interactive menu where you can manage
+API keys, log into Spotify, recache metadata, or generate playlists.
+
+Main options (for non-interactive usage):
 
 * `recache-moods`: Force a rebuild of the Last.fm mood cache
 * `--log-level`: Set log level (DEBUG, INFO, etc)
@@ -84,7 +87,7 @@ Generate a mix from a seed song using Last.fm similarity:
 python -m playlistgen seed-song --song "Miles Davis - Blue In Green" --num 20
 ```
 
-Launch the interactive text UI:
+Launch the interactive text UI explicitly:
 
 ```bash
 python -m playlistgen gui

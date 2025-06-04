@@ -10,10 +10,11 @@ except ImportError:
         yaml = None
 
 _config_cache = None
+_config_path = None
 
 
 def load_config(path: str = None) -> dict:
-    global _config_cache
+    global _config_cache, _config_path
     if _config_cache is not None and path is None:
         return _config_cache
 
@@ -75,4 +76,15 @@ def load_config(path: str = None) -> dict:
                 merged[key] = env_val
 
     _config_cache = merged
+    _config_path = config_path
     return _config_cache
+
+
+def save_config(cfg: dict, path: str | None = None) -> None:
+    """Persist configuration to disk."""
+    if yaml is None:
+        raise RuntimeError("yaml is required to save config")
+    p = Path(path or _config_path or "config.yml")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with open(p, "w", encoding="utf-8") as f:
+        yaml.safe_dump(cfg, f, default_flow_style=False)
