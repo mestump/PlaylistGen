@@ -17,20 +17,43 @@ except ImportError:
     HDBSCAN_AVAILABLE = False
 
 
+MOOD_ADJECTIVES = {
+    "Happy": "Joyful",
+    "Sad": "Melancholic",
+    "Angry": "Fiery",
+    "Chill": "Chill",
+    "Energetic": "Energetic",
+    "Romantic": "Romantic",
+    "Epic": "Epic",
+    "Dreamy": "Dreamy",
+    "Groovy": "Groovy",
+    "Nostalgic": "Nostalgic",
+}
+
+
+def humanize_label(mood: str | None, genre: str | None) -> str:
+    """Return a more natural playlist label from mood/genre."""
+    mood_adj = MOOD_ADJECTIVES.get(mood, mood) if mood else None
+    if mood_adj and genre:
+        return f"{mood_adj} {genre}"
+    if genre:
+        return genre
+    if mood_adj:
+        return mood_adj
+    return "Mix"
+
+
 def name_cluster(df=None, i=None):
-    """
-    Generate a descriptive name for a cluster based on its top mood and genre.
-    """
-    parts = []
+    """Generate a descriptive name for a cluster based on its top mood and genre."""
+    mood = None
+    genre = None
     if df is not None:
         if "Mood" in df.columns and df["Mood"].notnull().any():
-            top_mood = df["Mood"].mode().iloc[0]
-            parts.append(top_mood)
+            mood = df["Mood"].mode().iloc[0]
         if "Genre" in df.columns and df["Genre"].notnull().any():
-            top_genre = df["Genre"].mode().iloc[0]
-            parts.append(top_genre)
-    if parts:
-        return " & ".join(parts) + " Mix"
+            genre = df["Genre"].mode().iloc[0]
+    if mood or genre:
+        return humanize_label(mood, genre)
     if i is not None:
         return f"Cluster {i + 1}"
     return "Cluster"

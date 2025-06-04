@@ -114,7 +114,11 @@ TRACKS_PER_MIX: 50
 YEAR_MIX_ENABLED: true
 YEAR_MIX_RANGE: 1
 CACHE_DB: ~/.playlistgen/mood_cache.sqlite
+SPOTIFY_REDIRECT_URI: http://localhost:8888/callback
 ```
+
+The `SPOTIFY_REDIRECT_URI` value must match one of the redirect URIs
+configured in your Spotify developer dashboard.
 
 To use online genre/mood detection, set your **Last.fm API key** in the config.
 
@@ -127,7 +131,7 @@ To use online genre/mood detection, set your **Last.fm API key** in the config.
 3. **Genre Recovery:** Fill missing genres using Last.fm tags.
 4. **Track Scoring:** Apply custom scoring using plays, skips, artist and year affinity.
 5. **Clustering:** TF-IDF clustering by artist, genre, and track name.
-6. **Mix Creation:** Build year-based mixes (optional) and cluster-based mixes named by top genres.
+6. **Mix Creation:** Build year-based mixes (optional) and cluster-based mixes named with human-friendly mood and genre labels.
 7. **M3U Export:** Save playlists into the `./mixes` folder.
 
 ---
