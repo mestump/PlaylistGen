@@ -10,18 +10,12 @@ import collections
 
 # Load config for API keys
 from .config import load_config
+from .utils import progress_bar
 
 try:
     import requests
 except ImportError:
     requests = None
-
-try:
-    from tqdm import tqdm
-except ImportError:
-
-    def tqdm(iterable, **kwargs):
-        return iterable
 
 
 # ---- Mood Heuristic Mapping ----
@@ -143,7 +137,7 @@ def batch_tag_and_mood(
 
     tag_counts = collections.Counter()
     with shelve.open(str(shelve_path)) as cache_db:
-        for artist, track in tqdm(track_list, desc="Fetching tags/moods"):
+        for artist, track in progress_bar(track_list, desc="Fetching tags/moods"):
             track_id = f"{artist} - {track}".strip().lower()
             if track_id in mood_db and mood_db[track_id].get("mood") is not None:
                 logging.info(f"Skipping {artist} - {track}: mood already cached")

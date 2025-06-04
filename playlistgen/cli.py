@@ -38,6 +38,14 @@ def main():
 
     subparsers.add_parser("recache-moods", help="Force re-cache all moods from Last.fm")
 
+    subparsers.add_parser("gui", help="Launch interactive TUI")
+
+    seed_parser = subparsers.add_parser(
+        "seed-song", help="Generate a playlist from a seed song"
+    )
+    seed_parser.add_argument("--song", required=True, help="Seed song as 'Artist - Title'")
+    seed_parser.add_argument("--num", type=int, default=20, help="Number of tracks in the mix")
+
     args = parser.parse_args()
     cfg = load_config()
 
@@ -56,10 +64,24 @@ def main():
             cache_db.unlink()
 
         ensure_tag_mood_cache(cfg, itunes_json)
-    else:
+    elif args.command == "gui":
+        from .gui import run_gui
+
+        run_gui()
+    elif args.command == "seed-song":
+        from .seed_playlist import build_seed_playlist
+
+        build_seed_playlist(
+            args.song, cfg=cfg, library_dir=args.library_dir, limit=args.num
+        )
+    elif args.command is None and (args.genre or args.mood or args.library_dir):
         run_pipeline(
             cfg, genre=args.genre, mood=args.mood, library_dir=args.library_dir
         )
+    else:
+        from .gui import run_gui
+
+        run_gui()
 
 
 if __name__ == "__main__":
