@@ -11,8 +11,8 @@ playlistgen.log
 spotify_history/
 mixes/
 tests/
+# Local config
 config.yml
-bulk-mood
 # Ignore personal cache and database files
 lastfm_tags_cache.json
 taste_profile.json
