@@ -78,6 +78,18 @@ python -m playlistgen --mood "Epic"
 python -m playlistgen --genre "Rap" --mood "Energetic"
 ```
 
+Generate a mix from a seed song using Last.fm similarity:
+
+```bash
+python -m playlistgen seed-song --song "Miles Davis - Blue In Green" --num 20
+```
+
+Launch the interactive text UI:
+
+```bash
+python -m playlistgen gui
+```
+
 ---
 
 ## 🔧 Configuration
