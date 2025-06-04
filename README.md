@@ -17,6 +17,7 @@ A command-line Python tool for generating smart, mood-aware, Daily-Mix style pla
 * 📂 **M3U playlist generation with intelligent naming**
 * 💿 **Optional Year-based mix generation**
 * 📁 **Manual library scanning with `--library-dir` flag**
+* 🖥️ **Clean progress bars for status updates**
 
 ---
 
@@ -56,7 +57,10 @@ Or, if installed as a script:
 playlistgen
 ```
 
-Main options:
+Running without arguments now launches an interactive menu where you can manage
+API keys, log into Spotify, recache metadata, or generate playlists.
+
+Main options (for non-interactive usage):
 
 * `recache-moods`: Force a rebuild of the Last.fm mood cache
 * `--log-level`: Set log level (DEBUG, INFO, etc)
@@ -76,6 +80,18 @@ Filter by genre or mood:
 python -m playlistgen --genre "Rap"
 python -m playlistgen --mood "Epic"
 python -m playlistgen --genre "Rap" --mood "Energetic"
+```
+
+Generate a mix from a seed song using Last.fm similarity:
+
+```bash
+python -m playlistgen seed-song --song "Miles Davis - Blue In Green" --num 20
+```
+
+Launch the interactive text UI explicitly:
+
+```bash
+python -m playlistgen gui
 ```
 
 ---

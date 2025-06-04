@@ -16,6 +16,8 @@ from .playlist_generator import generate_candidates
 from .similarity import score_playlists
 from .feedback import load_feedback, save_feedback, update_feedback
 from .train_model import train_cluster_model
+from .seed_playlist import build_seed_playlist
+from .gui import run_gui
 
 __all__ = [
     "fetch_spotify_playlists",
@@ -30,4 +32,6 @@ __all__ = [
     "load_feedback",
     "save_feedback",
     "update_feedback",
+    "build_seed_playlist",
+    "run_gui",
 ]
