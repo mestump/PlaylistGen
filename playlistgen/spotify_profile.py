@@ -6,14 +6,9 @@ from collections import Counter
 
 from .tag_mood_service import load_tag_mood_db
 from .config import load_config
+from .utils import progress_bar
 
-# Optional progress bar; fall back if tqdm not installed
-try:
-    from tqdm import tqdm
-except ImportError:
-
-    def tqdm(iterable, **kwargs):
-        return iterable
+# Optional progress bar fallback handled in utils.progress_bar
 
 
 logging.basicConfig(level=logging.INFO)
@@ -57,7 +52,7 @@ def build_profile(spotify_dir=None, tag_mood_path=None, out_path=None) -> dict:
             logging.warning(f"Failed to load {f.name}: {e}")
             continue
 
-        for entry in tqdm(data, desc=f"Entries in {f.name}"):
+        for entry in progress_bar(data, desc=f"Entries in {f.name}"):
             artist = entry.get("master_metadata_album_artist_name")
             track = entry.get("master_metadata_track_name")
             if not artist or not track:

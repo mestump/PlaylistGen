@@ -12,6 +12,7 @@ requests = "^2.0"
 tqdm = "^4.0"
 scikit-learn = "^0.24"
 spotipy = "^2.23"
+questionary = "^1.10"
 
 [tool.poetry.dev-dependencies]
 pytest = "^6.0"
