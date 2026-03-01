@@ -33,7 +33,22 @@ def main():
     parser.add_argument(
         "--no-ai",
         action="store_true",
-        help="Disable Claude AI playlist naming even if AI_ENHANCE=true in config",
+        help="Disable all Claude AI features (naming, enrichment, curation)",
+    )
+    parser.add_argument(
+        "--ai-curate",
+        action="store_true",
+        help="Use Claude Sonnet to curate playlists (overrides clustering; requires ANTHROPIC_API_KEY)",
+    )
+    parser.add_argument(
+        "--ai-enrich",
+        action="store_true",
+        help="Use Claude Haiku to batch-enrich mood/energy metadata (requires ANTHROPIC_API_KEY)",
+    )
+    parser.add_argument(
+        "--no-lastfm",
+        action="store_true",
+        help="Skip Last.fm tag fetching even if LASTFM_API_KEY is set",
     )
 
     subparsers = parser.add_subparsers(dest="command")
@@ -147,6 +162,13 @@ def main():
             )
 
     elif args.command is None and (args.genre or args.mood or args.library_dir):
+        # Apply CLI flag overrides to cfg before running pipeline
+        if getattr(args, "ai_curate", False):
+            cfg["AI_CURATE"] = True
+        if getattr(args, "ai_enrich", False):
+            cfg["AI_BATCH_ENRICH"] = True
+        if getattr(args, "no_lastfm", False):
+            cfg["LASTFM_API_KEY"] = None
         run_pipeline(
             cfg,
             genre=args.genre,
@@ -156,6 +178,13 @@ def main():
         )
 
     else:
+        # Default: apply any CLI flag overrides, then launch GUI or plain run
+        if getattr(args, "ai_curate", False):
+            cfg["AI_CURATE"] = True
+        if getattr(args, "ai_enrich", False):
+            cfg["AI_BATCH_ENRICH"] = True
+        if getattr(args, "no_lastfm", False):
+            cfg["LASTFM_API_KEY"] = None
         from .gui import run_gui
         run_gui()
 

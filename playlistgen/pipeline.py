@@ -2,14 +2,16 @@
 Main orchestration pipeline for PlaylistGen.
 
 Wires together all stages:
-  1. Library loading   (iTunes XML or local directory + mutagen enrichment)
-  2. Last.fm tag cache (SQLite, rate-limited, resume-friendly)
-  3. Taste profile     (from Spotify history — optional)
-  4. Scoring           (genre, mood, year, play/skip counts — all bugs fixed)
-  5. Clustering        (mood / year / KMeans)
-  6. AI enhancement    (Claude API playlist naming — optional)
-  7. Playlist building (energy-arc ordering, M3U export)
-  8. Feedback          (record 'generated' event per playlist)
+  1. Library loading      (iTunes XML or local directory + mutagen enrichment)
+  2. Audio analysis       (libROSA — local BPM/energy/spectral; SQLite cached)
+  3. Metadata enrichment  (Claude batch | Last.fm | embedded genre — priority chain)
+  4. Session model        (co-occurrence + recency from Spotify streaming JSON)
+  5. Taste profile        (from Spotify history — optional)
+  6. Scoring              (genre, mood, year, play/skip + recency + co-occurrence)
+  7. Clustering / Curation (audio features | mood | tfidf | Claude AI curation)
+  8. AI naming            (Claude Haiku playlist naming — optional)
+  9. Playlist building    (energy-arc ordering, M3U export)
+  10. Feedback            (record 'generated' event per playlist)
 """
 
 import logging
@@ -56,8 +58,8 @@ def ensure_tag_cache(cfg: dict, itunes_json: Path) -> None:
     """
     if not cfg.get("LASTFM_API_KEY"):
         logging.info(
-            "LASTFM_API_KEY not set — skipping tag enrichment. "
-            "Mood detection will rely on iTunes/embedded Genre tags only."
+            "LASTFM_API_KEY not set — skipping Last.fm tag enrichment. "
+            "Mood detection will use Claude batch enrichment or embedded Genre tags."
         )
         return
     generate_tag_mood_cache(
@@ -87,7 +89,7 @@ def run_pipeline(
         genre:       If set, build a single playlist filtered to this genre.
         mood:        If set, build a single playlist filtered to this mood.
         library_dir: Scan a local directory instead of using iTunes XML.
-        no_ai:       Suppress AI enhancement even if AI_ENHANCE=true in config.
+        no_ai:       Suppress all AI features even if enabled in config.
 
     Returns:
         List of (label, DataFrame) tuples for each playlist built.
@@ -119,15 +121,83 @@ def run_pipeline(
     logging.info("Library loaded: %d tracks.", len(df))
 
     # ------------------------------------------------------------------
-    # Stage 2: Last.fm tag cache
+    # Stage 2: Local audio analysis (libROSA — optional, SQLite cached)
     # ------------------------------------------------------------------
+    librosa_enabled = bool(cfg.get("LIBROSA_ENABLED", True))
+    if librosa_enabled:
+        try:
+            from .audio_analysis import analyze_library
+
+            audio_cache = str(
+                Path(
+                    cfg.get(
+                        "AUDIO_CACHE_DB",
+                        Path.home() / ".playlistgen" / "audio.sqlite",
+                    )
+                ).expanduser()
+            )
+            workers = int(cfg.get("AUDIO_ANALYSIS_WORKERS", 4))
+            df = analyze_library(df, db_path=audio_cache, enabled=True, workers=workers)
+        except Exception as exc:
+            logging.warning("Audio analysis stage failed: %s — continuing.", exc)
+
+    # ------------------------------------------------------------------
+    # Stage 3: Metadata enrichment — priority chain
+    #   1. Claude batch enrichment (if AI_BATCH_ENRICH=true + API key set)
+    #   2. Last.fm (if LASTFM_API_KEY set)
+    #   3. Embedded genre fallback (always available via mood_map)
+    # ------------------------------------------------------------------
+    ai_batch_enrich = bool(cfg.get("AI_BATCH_ENRICH", False)) and not no_ai
+    api_key = cfg.get("ANTHROPIC_API_KEY")
+
+    if ai_batch_enrich and api_key:
+        logging.info("Stage 3a: Claude batch metadata enrichment…")
+        try:
+            from .ai_enhancer import batch_enrich_metadata
+
+            enrich_cache = str(
+                Path(
+                    cfg.get(
+                        "AI_ENRICH_CACHE_DB",
+                        Path.home() / ".playlistgen" / "claude_enrichment.sqlite",
+                    )
+                ).expanduser()
+            )
+            df = batch_enrich_metadata(
+                df,
+                api_key=api_key,
+                model=cfg.get("AI_MODEL", "claude-haiku-4-5-20251001"),
+                cache_db=enrich_cache,
+            )
+        except Exception as exc:
+            logging.warning("Claude batch enrichment failed: %s — falling back.", exc)
+
+    # Last.fm tag cache (runs even alongside Claude enrichment for tracks Claude missed)
     ensure_tag_cache(cfg, itunes_json)
     tag_db = load_tag_mood_db()
     tag_counts = build_tag_counts(tag_db)
     logging.info("Tag DB loaded: %d entries.", len(tag_db))
 
     # ------------------------------------------------------------------
-    # Stage 3: Taste profile (Spotify history — optional)
+    # Stage 4: Session model (Spotify streaming history — optional)
+    # ------------------------------------------------------------------
+    session_model = None
+    history_path = cfg.get("SPOTIFY_HISTORY_PATH")
+    if history_path:
+        logging.info("Stage 4: Loading session model from %s…", history_path)
+        try:
+            from .session_model import build_session_model
+
+            session_model = build_session_model(
+                history_path,
+                gap_minutes=int(cfg.get("SESSION_GAP_MINUTES", 30)),
+                half_life_days=int(cfg.get("RECENCY_HALF_LIFE_DAYS", 90)),
+            )
+        except Exception as exc:
+            logging.warning("Session model build failed: %s — continuing.", exc)
+
+    # ------------------------------------------------------------------
+    # Stage 5: Taste profile (Spotify listening history — optional)
     # ------------------------------------------------------------------
     spotify_dir = Path(cfg.get("SPOTIFY_DIR", "./spotify_history"))
     profile_path = Path(cfg.get("PROFILE_PATH", "./taste_profile.json"))
@@ -149,13 +219,18 @@ def run_pipeline(
         profile = {}
 
     # ------------------------------------------------------------------
-    # Stage 4: Scoring
+    # Stage 6: Scoring
     # ------------------------------------------------------------------
     logging.info("Scoring tracks…")
-    scored_df = score_tracks(df, config=profile, tag_mood_db=tag_db)
+    scored_df = score_tracks(
+        df,
+        config=profile,
+        tag_mood_db=tag_db,
+        session_model=session_model,
+    )
 
     # ------------------------------------------------------------------
-    # Stage 4b: Genre / Mood filter (single playlist mode)
+    # Stage 6b: Genre / Mood filter (single playlist mode)
     # ------------------------------------------------------------------
     if genre or mood:
         filt = scored_df.copy()
@@ -178,52 +253,79 @@ def run_pipeline(
         return build_playlists([filt], scored_df, name_fn=lambda *_: label)
 
     # ------------------------------------------------------------------
-    # Stage 5: Clustering
+    # Stage 7: Clustering / AI Curation
     # ------------------------------------------------------------------
     n_clusters = int(cfg.get("CLUSTER_COUNT", 6))
     num_playlists = int(cfg.get("NUM_PLAYLISTS", n_clusters))
     cluster_by_year = bool(cfg.get("YEAR_MIX_ENABLED", False))
     year_range = int(cfg.get("YEAR_MIX_RANGE", 0))
     cluster_by_mood = bool(cfg.get("CLUSTER_BY_MOOD", False))
+    cluster_hybrid_mode = bool(cfg.get("CLUSTER_HYBRID", False))
+    cluster_strategy = cfg.get("CLUSTER_STRATEGY", "auto")
     min_tracks_per_year = int(cfg.get("MIN_TRACKS_PER_YEAR", 10))
 
-    clusters = cluster_tracks(
-        scored_df,
-        n_clusters=n_clusters,
-        cluster_by_year=cluster_by_year,
-        year_range=year_range,
-        cluster_by_mood=cluster_by_mood,
-        min_tracks_per_year=min_tracks_per_year,
-    )
+    ai_curate = bool(cfg.get("AI_CURATE", False)) and not no_ai
+    labelled = None  # set by AI curation or algorithmic clustering
 
-    # Shuffle and cap
-    random.shuffle(clusters)
-    selected = clusters[:num_playlists]
+    if ai_curate and api_key:
+        logging.info("Stage 7: Claude AI playlist curation…")
+        try:
+            from .ai_enhancer import claude_curate_playlists
 
-    # Build preliminary labels (used for AI input and fallback)
-    labelled = [(name_cluster(cl, i), cl) for i, cl in enumerate(selected)]
-
-    # ------------------------------------------------------------------
-    # Stage 6: AI enhancement (optional)
-    # ------------------------------------------------------------------
-    ai_enabled = bool(cfg.get("AI_ENHANCE", False)) and not no_ai
-    if ai_enabled:
-        api_key = cfg.get("ANTHROPIC_API_KEY")
-        if api_key:
-            try:
-                from .ai_enhancer import enhance_playlists
-                labelled = enhance_playlists(
-                    labelled,
-                    api_key=api_key,
-                    model=cfg.get("AI_MODEL", "claude-haiku-4-5-20251001"),
+            labelled = claude_curate_playlists(
+                scored_df,
+                n_playlists=num_playlists,
+                api_key=api_key,
+                model=cfg.get("AI_CURATE_MODEL", "claude-sonnet-4-6"),
+            )
+            if not labelled:
+                logging.warning(
+                    "Claude curation returned no playlists — falling back to clustering."
                 )
-            except Exception as exc:
-                logging.warning("AI enhancement failed: %s — using generated labels.", exc)
-        else:
-            logging.info("AI_ENHANCE=true but ANTHROPIC_API_KEY not set — skipping.")
+                labelled = None
+        except Exception as exc:
+            logging.warning(
+                "Claude curation failed: %s — falling back to clustering.", exc
+            )
+            labelled = None
+    elif ai_curate:
+        logging.info("AI_CURATE=true but ANTHROPIC_API_KEY not set — using clustering.")
+
+    if labelled is None:
+        clusters = cluster_tracks(
+            scored_df,
+            n_clusters=n_clusters,
+            cluster_by_year=cluster_by_year,
+            year_range=year_range,
+            cluster_by_mood=cluster_by_mood,
+            cluster_hybrid_mode=cluster_hybrid_mode,
+            min_tracks_per_year=min_tracks_per_year,
+            strategy=cluster_strategy,
+        )
+        random.shuffle(clusters)
+        selected = clusters[:num_playlists]
+        labelled = [(name_cluster(cl, i), cl) for i, cl in enumerate(selected)]
 
     # ------------------------------------------------------------------
-    # Stage 7: Playlist building + M3U export
+    # Stage 8: AI naming (when not using AI_CURATE; optional)
+    # ------------------------------------------------------------------
+    ai_enabled = bool(cfg.get("AI_ENHANCE", False)) and not no_ai and not ai_curate
+    if ai_enabled and api_key:
+        try:
+            from .ai_enhancer import enhance_playlists
+
+            labelled = enhance_playlists(
+                labelled,
+                api_key=api_key,
+                model=cfg.get("AI_MODEL", "claude-haiku-4-5-20251001"),
+            )
+        except Exception as exc:
+            logging.warning("AI naming failed: %s — using generated labels.", exc)
+    elif ai_enabled:
+        logging.info("AI_ENHANCE=true but ANTHROPIC_API_KEY not set — skipping.")
+
+    # ------------------------------------------------------------------
+    # Stage 9: Playlist building + M3U export
     # ------------------------------------------------------------------
     playlists = build_playlists(
         [cl for _, cl in labelled],
@@ -233,14 +335,19 @@ def run_pipeline(
     )
 
     # ------------------------------------------------------------------
-    # Stage 8: Feedback
+    # Stage 10: Feedback
     # ------------------------------------------------------------------
-    feedback_path = Path(cfg.get("FEEDBACK_PATH", Path.home() / ".playlistgen" / "feedback.json"))
+    feedback_path = Path(
+        cfg.get("FEEDBACK_PATH", Path.home() / ".playlistgen" / "feedback.json")
+    )
     for label, _ in playlists:
         update_feedback(str(feedback_path), label, "generated")
 
-    logging.info("=== Pipeline complete. %d playlists written to %s ===",
-                 len(playlists), cfg.get("OUTPUT_DIR", "./mixes"))
+    logging.info(
+        "=== Pipeline complete. %d playlists written to %s ===",
+        len(playlists),
+        cfg.get("OUTPUT_DIR", "./mixes"),
+    )
     return playlists
 
 
@@ -252,4 +359,9 @@ def run_pipeline(
 def ensure_tag_mood_cache(cfg: dict, itunes_json: Path) -> Path:
     """Backward-compat shim for cli.py recache-moods command."""
     ensure_tag_cache(cfg, itunes_json)
-    return Path(cfg.get("TAG_MOOD_CACHE", Path.home() / ".playlistgen" / "lastfm_tags_cache.json"))
+    return Path(
+        cfg.get(
+            "TAG_MOOD_CACHE",
+            Path.home() / ".playlistgen" / "lastfm_tags_cache.json",
+        )
+    )

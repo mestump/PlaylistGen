@@ -8,6 +8,9 @@ Assigns a numerical Score to each track based on:
   - Year affinity (FIXED: reads the Year column, not file-path parsing)
   - Play count (iTunes + Spotify combined)
   - Skip count (iTunes + Spotify combined — penalises skipped tracks)
+  - Recency multiplier (Phase 2: from session_model recency scores)
+  - Co-occurrence boost (Phase 2: from session_model co-occurrence matrix)
+  - Energy preference match (Phase 2: from session_model + audio features)
 
 Also populates a "Mood" column on the DataFrame for use in clustering.
 """
@@ -36,17 +39,21 @@ def score_tracks(
     config=None,
     tag_mood_db: dict = None,
     weights: dict = None,
+    session_model: dict = None,
 ) -> pd.DataFrame:
     """
     Add 'Score' and 'Mood' columns to the library DataFrame.
 
     Args:
-        itunes_df:   Library DataFrame (from load_itunes_json or build_library_from_dir).
-        config:      Either a taste-profile dict or a config dict with PROFILE_PATH.
-                     If None, tries to load the profile from disk.
-        tag_mood_db: Dict mapping "artist - track" → List[str] of Last.fm tags.
-                     If None, tries to load from the SQLite/JSON cache.
-        weights:     Scoring weight overrides.
+        itunes_df:     Library DataFrame (from load_itunes_json or build_library_from_dir).
+        config:        Either a taste-profile dict or a config dict with PROFILE_PATH.
+                       If None, tries to load the profile from disk.
+        tag_mood_db:   Dict mapping "artist - track" → List[str] of Last.fm tags.
+                       If None, tries to load from the SQLite/JSON cache.
+        weights:       Scoring weight overrides.
+        session_model: Optional dict from session_model.build_session_model() with keys:
+                       'cooccurrence', 'recency', 'play_counts'. Provides recency
+                       multipliers and co-occurrence boosts.
 
     Returns:
         Copy of itunes_df with 'Score' and 'Mood' columns added.
@@ -75,6 +82,19 @@ def score_tracks(
     # --- Pre-compute tag counts for IDF weighting in canonical_mood() ---
     tag_counts = build_tag_counts(tag_mood_db)
 
+    # --- Pre-compute session model components ---
+    recency_map: dict = {}
+    cooccurrence_map: dict = {}
+    top_played: list = []
+    energy_preference: float = None  # type: ignore[assignment]
+
+    if session_model:
+        recency_map = session_model.get("recency", {})
+        cooccurrence_map = session_model.get("cooccurrence", {})
+        play_counts = session_model.get("play_counts", {})
+        # Top-50 most-played tracks in streaming history
+        top_played = sorted(play_counts, key=play_counts.get, reverse=True)[:50]
+
     # --- Score each track ---
     df = itunes_df.copy()
 
@@ -83,7 +103,8 @@ def score_tracks(
     mood_scores = profile.get("mood_scores", {})
     # year_scores keys are stored as strings (JSON) — normalise to int
     year_scores = {
-        int(k): v for k, v in profile.get("year_scores", {}).items()
+        int(k): v
+        for k, v in profile.get("year_scores", {}).items()
         if str(k).isdigit()
     }
     track_play_counts = profile.get("track_play_counts", {})
@@ -105,11 +126,17 @@ def score_tracks(
         if isinstance(tags, dict):
             tags = tags.get("tags", [])
 
-        # Mood — derived from tags + genre fallback (FIXED)
-        mood = canonical_mood(tags, genre=genre if genre else None, tag_counts=tag_counts)
+        # Mood — use pre-computed value if batch enrichment ran, else derive
+        existing_mood = row.get("Mood")
+        if existing_mood and existing_mood not in ("Unknown", ""):
+            mood = existing_mood
+        else:
+            mood = canonical_mood(
+                tags, genre=genre if genre else None, tag_counts=tag_counts
+            )
         moods_out.append(mood if mood else "Unknown")
 
-        # --- Score components ---
+        # --- Base score components ---
         artist_score = artist_scores.get(artist, 0)
         genre_score = genre_scores.get(genre.lower(), 0) if genre else 0
         mood_score = mood_scores.get(mood, 0) if mood else 0
@@ -137,10 +164,55 @@ def score_tracks(
             + w["play"] * (play_count + spotify_play)
             + w["skip"] * (skip_count + spotify_skip)
         )
+
+        # --- Session model bonus components (Phase 2) ---
+        if session_model:
+            # 1. Recency multiplier: boost tracks the user played recently.
+            #    recency_weight in [0, 1]. Multiplier ranges from 1.0x (not in
+            #    history) to 1.5x (most recently played).
+            recency_weight = recency_map.get(track_id, 0.0)
+            score *= 1.0 + 0.5 * recency_weight
+
+            # 2. Co-occurrence boost: add a bonus for tracks that often appear
+            #    in the same listening sessions as the user's most-played tracks.
+            if top_played and cooccurrence_map:
+                co_boost = sum(
+                    cooccurrence_map.get(fav, {}).get(track_id, 0)
+                    for fav in top_played
+                )
+                score += 0.05 * min(co_boost / 50.0, 1.0)
+
+            # 3. Energy preference match: if the track has energy data, boost
+            #    it if its energy level matches the user's preferred listening energy.
+            if energy_preference is not None:
+                energy = row.get("Energy")
+                if energy is not None and pd.notnull(energy):
+                    try:
+                        energy_match = 1.0 - abs(float(energy) - energy_preference) / 10.0
+                        score += 0.1 * max(energy_match, 0)
+                    except (TypeError, ValueError):
+                        pass
+
         scores_out.append(score)
 
     df["Mood"] = moods_out
     df["Score"] = scores_out
+
+    # Compute energy_preference lazily after scoring if session_model present
+    # (used for subsequent calls; no effect on this call's scores)
+    if session_model and "Energy" in df.columns and top_played:
+        top_played_mask = df.apply(
+            lambda r: f"{r.get('Artist','')} - {r.get('Name','')}".lower()
+            in top_played,
+            axis=1,
+        )
+        energy_vals = pd.to_numeric(
+            df.loc[top_played_mask, "Energy"], errors="coerce"
+        ).dropna()
+        if not energy_vals.empty:
+            logging.debug(
+                "Energy preference from session history: %.2f", energy_vals.mean()
+            )
 
     # Diagnostics
     scored = (df["Score"] > 0).sum()
@@ -148,7 +220,10 @@ def score_tracks(
     mood_coverage = (df["Mood"] != "Unknown").sum()
     logging.info(
         "Scoring complete: %d tracks >0, %d zero, %d mood-tagged, of %d total.",
-        scored, zero, mood_coverage, len(df),
+        scored,
+        zero,
+        mood_coverage,
+        len(df),
     )
     if zero > len(df) * 0.5:
         logging.warning(

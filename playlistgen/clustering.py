@@ -17,6 +17,7 @@ import pandas as pd
 try:
     from sklearn.feature_extraction.text import TfidfVectorizer
     from sklearn.cluster import KMeans
+    from sklearn.preprocessing import MinMaxScaler
 
     SKLEARN_AVAILABLE = True
 except ImportError:
@@ -75,6 +76,98 @@ def name_cluster(df: pd.DataFrame = None, i: int = None) -> str:
     return f"Cluster {(i or 0) + 1}"
 
 
+def cluster_by_audio_features(
+    df: pd.DataFrame,
+    n_clusters: int = 6,
+) -> list:
+    """
+    Cluster tracks using numeric audio features: BPM, Energy, SpectralBrightness, ZCR.
+
+    Features are normalised to [0, 1] before KMeans clustering. Produces
+    playlists differentiated by sonic texture rather than genre text labels.
+
+    Falls back to [] if sklearn is unavailable or energy coverage is < 30%.
+    """
+    if not SKLEARN_AVAILABLE:
+        return []
+
+    feature_cols = [
+        c for c in ["BPM", "Energy", "SpectralBrightness", "ZCR"]
+        if c in df.columns
+    ]
+    if not feature_cols:
+        return []
+
+    df = df.copy()
+    feat_df = df[feature_cols].copy()
+    for col in feature_cols:
+        feat_df[col] = pd.to_numeric(feat_df[col], errors="coerce")
+        median_val = feat_df[col].median()
+        feat_df[col] = feat_df[col].fillna(
+            median_val if pd.notnull(median_val) else 0
+        )
+
+    energy_col = "Energy" if "Energy" in feat_df.columns else feature_cols[0]
+    coverage = df[energy_col].notna().mean() if energy_col in df.columns else 0
+    if coverage < 0.3:
+        logging.warning(
+            "Audio feature coverage %.0f%% < 30%% — skipping audio clustering.",
+            coverage * 100,
+        )
+        return []
+
+    scaler = MinMaxScaler()
+    X = scaler.fit_transform(feat_df.values)
+
+    n = min(n_clusters, len(df))
+    clusterer = KMeans(n_clusters=n, random_state=42, n_init=10)
+    labels = clusterer.fit_predict(X)
+
+    df["_cluster"] = labels
+    clusters = [
+        grp.drop(columns=["_cluster"]).copy()
+        for _, grp in df.groupby("_cluster")
+        if len(grp) > 0
+    ]
+    logging.info(
+        "Audio feature clusters: %d groups — sizes: %s",
+        len(clusters),
+        [len(c) for c in clusters],
+    )
+    return clusters
+
+
+def _cluster_hybrid_impl(
+    df: pd.DataFrame,
+    n_audio_subclusters: int = 2,
+) -> list:
+    """
+    Internal: group by mood first, then sub-cluster each mood by audio features.
+
+    Produces focused playlists like "Chill – Acoustic", "Chill – Electronic",
+    "Sad – Quiet", "Sad – Driving" etc.
+    """
+    if "Mood" not in df.columns or df["Mood"].isnull().all():
+        return []
+
+    result = []
+    for mood, mood_group in df.groupby("Mood"):
+        if not mood or mood == "Unknown" or mood_group.empty:
+            continue
+        if len(mood_group) < 10:
+            result.append(mood_group.copy())
+            continue
+        sub_clusters = cluster_by_audio_features(
+            mood_group, n_clusters=n_audio_subclusters
+        )
+        if sub_clusters:
+            result.extend(sub_clusters)
+        else:
+            result.append(mood_group.copy())
+
+    return result
+
+
 def cluster_tracks(
     df: pd.DataFrame,
     n_clusters: int = 6,
@@ -82,26 +175,92 @@ def cluster_tracks(
     cluster_by_year: bool = False,
     year_range: int = 0,
     cluster_by_mood: bool = False,
+    cluster_hybrid_mode: bool = False,
     min_tracks_per_year: int = 25,
+    strategy: str = "auto",
 ) -> list:
     """
     Cluster tracks into themed playlists.
 
-    Strategy priority:
-      1. Mood-based (if cluster_by_mood=True and Mood column is populated)
-      2. Year-based (if cluster_by_year=True and Year column is populated)
-      3. TF-IDF KMeans / HDBSCAN fallback
+    When strategy="auto" (default), the best available strategy is chosen:
+      1. Audio feature KMeans  (if Energy column has >30% coverage)
+      2. Mood-based grouping   (if Mood column has >50% non-Unknown coverage)
+      3. TF-IDF KMeans         (text-based fallback)
+
+    Explicit strategies: "audio", "mood", "year", "tfidf".
+    cluster_hybrid_mode=True: group by mood then sub-cluster by audio features.
 
     Returns a list of DataFrames, one per cluster.
     """
 
     # ------------------------------------------------------------------
-    # Strategy 1: Mood-based
+    # Hybrid mode: mood groups → audio sub-clusters
     # ------------------------------------------------------------------
-    if cluster_by_mood:
+    if cluster_hybrid_mode:
+        result = _cluster_hybrid_impl(
+            df, n_audio_subclusters=max(1, n_clusters // 5)
+        )
+        if result:
+            logging.info(
+                "Hybrid clusters: %d groups — sizes: %s",
+                len(result),
+                [len(g) for g in result],
+            )
+            return result
+        logging.warning("Hybrid clustering produced no groups — falling back.")
+
+    # ------------------------------------------------------------------
+    # Auto strategy selection
+    # ------------------------------------------------------------------
+    if strategy == "auto":
+        energy_coverage = 0.0
+        mood_coverage = 0.0
+        if "Energy" in df.columns:
+            energy_coverage = df["Energy"].notna().mean()
+        if "Mood" in df.columns:
+            mood_coverage = (
+                df["Mood"].notna() & (df["Mood"] != "Unknown")
+            ).mean()
+
+        if energy_coverage > 0.3:
+            strategy = "audio"
+        elif mood_coverage > 0.5 or cluster_by_mood:
+            strategy = "mood"
+        elif cluster_by_year:
+            strategy = "year"
+        else:
+            strategy = "tfidf"
+        logging.info(
+            "Auto strategy selected: '%s' "
+            "(energy_cov=%.0f%%, mood_cov=%.0f%%)",
+            strategy,
+            energy_coverage * 100,
+            mood_coverage * 100,
+        )
+
+    # ------------------------------------------------------------------
+    # Strategy: audio features
+    # ------------------------------------------------------------------
+    if strategy == "audio":
+        result = cluster_by_audio_features(df, n_clusters=n_clusters)
+        if result:
+            return result
+        logging.warning(
+            "Audio clustering failed — falling back to mood/tfidf."
+        )
+        # Determine next best fallback
+        if "Mood" in df.columns and (df["Mood"] != "Unknown").mean() > 0.5:
+            strategy = "mood"
+        else:
+            strategy = "tfidf"
+
+    # ------------------------------------------------------------------
+    # Strategy: mood-based
+    # ------------------------------------------------------------------
+    if strategy == "mood" or cluster_by_mood:
         if "Mood" not in df.columns or df["Mood"].isnull().all():
             logging.warning(
-                "CLUSTER_BY_MOOD enabled but no Mood data — falling back."
+                "Mood strategy selected but no Mood data — falling back."
             )
         else:
             mood_groups = []
@@ -118,14 +277,12 @@ def cluster_tracks(
             logging.warning("No non-Unknown mood clusters found — falling back.")
 
     # ------------------------------------------------------------------
-    # Strategy 2: Year-based
-    # Uses df['Year'] directly (populated by iTunes XML or mutagen enrichment)
+    # Strategy: year-based
     # ------------------------------------------------------------------
-    if cluster_by_year:
+    if strategy == "year" or cluster_by_year:
         year_col = df.get("Year") if "Year" in df.columns else None
         if year_col is not None and year_col.notna().any():
             df = df.copy()
-            # Coerce to numeric; out-of-range already set to NaN by itunes.py
             df["Year"] = pd.to_numeric(df["Year"], errors="coerce")
             year_groups = []
 
@@ -158,20 +315,22 @@ def cluster_tracks(
                 )
                 return year_groups
             logging.warning(
-                "No year-based clusters met the minimum track threshold (%d) — falling back.",
+                "No year-based clusters met the minimum track threshold (%d)"
+                " — falling back.",
                 min_tracks_per_year,
             )
         else:
             logging.warning(
-                "YEAR_MIX_ENABLED but no valid Year data in library — falling back."
+                "Year strategy but no valid Year data — falling back."
             )
 
     # ------------------------------------------------------------------
-    # Strategy 3: TF-IDF KMeans / HDBSCAN
+    # Strategy: TF-IDF KMeans / HDBSCAN (fallback)
     # ------------------------------------------------------------------
     if not SKLEARN_AVAILABLE:
         logging.warning(
-            "sklearn not available — splitting library into %d equal parts.", n_clusters
+            "sklearn not available — splitting library into %d equal parts.",
+            n_clusters,
         )
         df_sorted = df.sort_values("Score", ascending=False).reset_index(drop=True)
         parts = [
@@ -181,11 +340,10 @@ def cluster_tracks(
         return [p for p in parts if not p.empty]
 
     df = df.copy()
-    mood_str = df["Mood"].fillna("") if "Mood" in df.columns else ""
-    genre_str = df["Genre"].fillna("") if "Genre" in df.columns else ""
     df["_text"] = (
         df[["Genre", "Artist"]].fillna("").agg(" ".join, axis=1)
-        + " " + df.get("Mood", pd.Series("", index=df.index)).fillna("")
+        + " "
+        + df.get("Mood", pd.Series("", index=df.index)).fillna("")
     )
 
     vectorizer = TfidfVectorizer(max_features=1000, min_df=1)
@@ -206,7 +364,7 @@ def cluster_tracks(
         if len(grp) > 0
     ]
     logging.info(
-        "KMeans clusters: %d groups — sizes: %s",
+        "TF-IDF KMeans clusters: %d groups — sizes: %s",
         len(clusters),
         [len(c) for c in clusters],
     )

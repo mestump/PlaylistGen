@@ -23,8 +23,12 @@ def edit_tokens(cfg: dict) -> None:
         "Spotify Client Secret", default=str(cfg.get("SPOTIFY_CLIENT_SECRET", ""))
     ).ask()
     anthropic_key = questionary.text(
-        "Anthropic API key (for AI playlist naming — leave blank to disable)",
+        "Anthropic API key (for AI naming/enrichment/curation — leave blank to disable)",
         default=str(cfg.get("ANTHROPIC_API_KEY") or ""),
+    ).ask()
+    history_path = questionary.text(
+        "Spotify streaming history path (StreamingHistory*.json or directory — leave blank to skip)",
+        default=str(cfg.get("SPOTIFY_HISTORY_PATH") or ""),
     ).ask()
     if lastfm:
         cfg["LASTFM_API_KEY"] = lastfm
@@ -35,6 +39,8 @@ def edit_tokens(cfg: dict) -> None:
     if anthropic_key:
         cfg["ANTHROPIC_API_KEY"] = anthropic_key
         cfg["AI_ENHANCE"] = True
+    if history_path:
+        cfg["SPOTIFY_HISTORY_PATH"] = history_path
     save_config(cfg)
 
 
@@ -79,6 +85,8 @@ def run_gui() -> str | None:
             "Random mix",
             "Filter by mood",
             "Filter by genre",
+            "AI Curate playlists",
+            "AI Batch Enrich library",
             "Discover new music",
             "Force recache",
             "Recache moods",
@@ -109,6 +117,36 @@ def run_gui() -> str | None:
     elif action == "Filter by genre":
         genre = questionary.text("Genre").ask()
         run_pipeline(cfg, genre=genre or None)
+
+    elif action == "AI Curate playlists":
+        if not cfg.get("ANTHROPIC_API_KEY"):
+            print("ANTHROPIC_API_KEY not set. Use 'Set API tokens' first.")
+            return action
+        cfg_copy = {**cfg, "AI_CURATE": True}
+        run_pipeline(cfg_copy)
+
+    elif action == "AI Batch Enrich library":
+        if not cfg.get("ANTHROPIC_API_KEY"):
+            print("ANTHROPIC_API_KEY not set. Use 'Set API tokens' first.")
+            return action
+        from .pipeline import ensure_itunes_json
+        from .itunes import load_itunes_json
+        from .ai_enhancer import batch_enrich_metadata
+
+        itunes_json = ensure_itunes_json(cfg)
+        library_df = load_itunes_json(str(itunes_json))
+        enrich_cache = cfg.get(
+            "AI_ENRICH_CACHE_DB",
+            str(__import__("pathlib").Path.home() / ".playlistgen" / "claude_enrichment.sqlite"),
+        )
+        enriched_df = batch_enrich_metadata(
+            library_df,
+            api_key=cfg["ANTHROPIC_API_KEY"],
+            model=cfg.get("AI_MODEL", "claude-haiku-4-5-20251001"),
+            cache_db=enrich_cache,
+        )
+        mood_count = (enriched_df["Mood"].notna() & (enriched_df["Mood"] != "Unknown")).sum()
+        print(f"Enrichment complete: Mood populated for {mood_count} / {len(enriched_df)} tracks.")
 
     elif action == "Discover new music":
         genre = questionary.text("Genre or search query (e.g. 'Indie Rock')").ask()

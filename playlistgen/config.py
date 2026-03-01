@@ -48,6 +48,24 @@ def load_config(path: str = None) -> dict:
         "AI_MODEL": "claude-haiku-4-5-20251001",
         # Feedback persistence
         "FEEDBACK_PATH": str(Path.home() / ".playlistgen" / "feedback.json"),
+        # Phase 2: local audio analysis (libROSA)
+        "LIBROSA_ENABLED": True,
+        "AUDIO_CACHE_DB": str(Path.home() / ".playlistgen" / "audio.sqlite"),
+        "AUDIO_ANALYSIS_WORKERS": 4,
+        # Phase 2: session model from Spotify streaming history JSON
+        "SPOTIFY_HISTORY_PATH": None,
+        "SESSION_GAP_MINUTES": 30,
+        "RECENCY_HALF_LIFE_DAYS": 90,
+        # Phase 2: Claude batch enrichment and full curation
+        "AI_BATCH_ENRICH": False,
+        "AI_CURATE": False,
+        "AI_CURATE_MODEL": "claude-sonnet-4-6",
+        "AI_ENRICH_CACHE_DB": str(
+            Path.home() / ".playlistgen" / "claude_enrichment.sqlite"
+        ),
+        # Phase 2: clustering strategy
+        "CLUSTER_STRATEGY": "auto",
+        "CLUSTER_HYBRID": False,
     }
 
     # Determine where to load the user config: explicit path, project-root config.yml, or home config
