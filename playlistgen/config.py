@@ -33,11 +33,21 @@ def load_config(path: str = None) -> dict:
         "SPOTIFY_MOOD_ENABLED": True,
         "ITUNES_MOOD_ENABLED": True,
         "MOOD_CONCURRENCY": 10,
-        # Add this line to set a default mood cache path
+        # Tag cache paths
         "TAG_MOOD_CACHE": str(Path.home() / ".playlistgen" / "lastfm_tags_cache.json"),
         "CACHE_DB": str(Path.home() / ".playlistgen" / "mood_cache.sqlite"),
+        "LASTFM_CACHE_DB": str(Path.home() / ".playlistgen" / "lastfm.sqlite"),
+        "LASTFM_RATE_LIMIT_MS": 200,
         # Default Spotify OAuth redirect URI
         "SPOTIFY_REDIRECT_URI": "http://localhost:8888/callback",
+        # mutagen audio tag enrichment
+        "MUTAGEN_ENABLED": True,
+        # AI playlist naming via Claude API
+        "AI_ENHANCE": False,
+        "ANTHROPIC_API_KEY": None,
+        "AI_MODEL": "claude-haiku-4-5-20251001",
+        # Feedback persistence
+        "FEEDBACK_PATH": str(Path.home() / ".playlistgen" / "feedback.json"),
     }
 
     # Determine where to load the user config: explicit path, project-root config.yml, or home config
