@@ -1,227 +1,161 @@
-import os
+"""
+tag_mood_service — backward-compatibility shim.
+
+All functionality has been moved to:
+  lastfm_client.py  — API fetch + SQLite cache + rate limiting
+  mood_map.py       — Mood keyword mapping and canonical_mood()
+
+Existing call sites continue to work unchanged.
+"""
+
 import json
-import time
-from pathlib import Path
-import shelve
 import logging
-import re
-import math
-import collections
+from pathlib import Path
+from typing import Optional
 
-# Load config for API keys
 from .config import load_config
-from .utils import progress_bar
+from .lastfm_client import (
+    generate_tag_cache,
+    load_tag_db_from_sqlite,
+    init_cache_db,
+    fetch_track_tags,
+    migrate_json_to_sqlite,
+)
+from .mood_map import MOODS, PRIORITY, canonical_mood, build_tag_counts
 
-try:
-    import requests
-except ImportError:
-    requests = None
-
-
-# ---- Mood Heuristic Mapping ----
-MOODS = {
-    "Happy": ["happy", "feel good", "cheerful", "uplifting", "good mood"],
-    "Sad": ["sad", "melancholy", "melancholic", "heartbreak", "somber"],
-    "Angry": ["angry", "aggressive", "fierce", "rage"],
-    "Chill": ["chill", "chillout", "mellow", "laid back", "relax", "soothing", "calm"],
-    "Energetic": ["energetic", "high energy", "party", "dance", "upbeat", "fast"],
-    "Romantic": ["romantic", "love song", "ballad"],
-    "Epic": ["epic", "anthemic", "dramatic", "orchestral"],
-    "Dreamy": ["dreamy", "ethereal", "ambient", "spacey"],
-    "Groovy": ["groovy", "funky", "swing"],
-    "Nostalgic": ["nostalgia", "retro", "oldies", "classic"],
-}
-PRIORITY = [
-    "Happy",
-    "Sad",
-    "Chill",
-    "Energetic",
-    "Romantic",
-    "Epic",
-    "Dreamy",
-    "Groovy",
-    "Nostalgic",
+# Re-export so any code doing `from .tag_mood_service import canonical_mood` still works
+__all__ = [
+    "MOODS",
+    "PRIORITY",
+    "canonical_mood",
+    "fetch_lastfm_tags",
+    "batch_tag_and_mood",
+    "load_tag_mood_db",
+    "generate_tag_mood_cache",
 ]
 
-# ---- Config / Cache ----
 _cfg = load_config()
-CACHE_PATH = Path(_cfg.get("TAG_MOOD_CACHE"))
-SHELVE_PATH = Path(_cfg.get("CACHE_DB"))
-# Last.fm API key: environment variable overrides config
-API_KEY = os.getenv("LASTFM_API_KEY") or load_config().get("LASTFM_API_KEY")
+_API_KEY = _cfg.get("LASTFM_API_KEY")
+_CACHE_DB = _cfg.get("LASTFM_CACHE_DB") or _cfg.get("CACHE_DB")
+_TAG_MOOD_CACHE = _cfg.get("TAG_MOOD_CACHE")
 
 
-def canonical_mood(tags, tag_counts=None):
-    scores = collections.defaultdict(float)
-    for raw in tags:
-        clean = re.sub(r"[^\w\s]", " ", raw.lower()).strip()
-        for mood, keys in MOODS.items():
-            for k in keys:
-                if k in clean:
-                    # Weight by inverse tag frequency if available (optional)
-                    weight = 1.0
-                    if tag_counts and clean in tag_counts:
-                        count = tag_counts.get(clean, 1)
-                        if count <= 1:
-                            weight = 1.0
-                        else:
-                            weight = 1.0 / math.log10(count)
-                    scores[mood] += weight
-    if scores:
-        best = max(
-            scores,
-            key=lambda m: (scores[m], -PRIORITY.index(m) if m in PRIORITY else 99),
-        )
-        return best
-    return None
-
-
-def fetch_lastfm_tags(artist, track, api_key, cache_db=None):
-    """Returns a list of tags from Last.fm for (artist, track)."""
-    if not api_key:
-        raise RuntimeError(
-            "LASTFM_API_KEY is not set. Please set the environment variable or add it to config.yml"
-        )
-    key = f"{artist.lower()} - {track.lower()}"
-    if cache_db is not None:
-        if key in cache_db:
-            return cache_db[key]
-    url = (
-        f"https://ws.audioscrobbler.com/2.0/?method=track.gettoptags"
-        f"&artist={requests.utils.quote(artist)}"
-        f"&track={requests.utils.quote(track)}"
-        f"&api_key={api_key}&format=json"
-    )
-    try:
-        resp = requests.get(url, timeout=5)
-        tags = []
-        data = resp.json()
-        for tag in data.get("toptags", {}).get("tag", []):
-            tname = tag.get("name", "")
-            if tname:
-                tags.append(tname)
-        if cache_db is not None:
-            cache_db[key] = tags
-        # Optional throttling:
-        # time.sleep(0.1)
-        return tags
-    except Exception:
-        logging.exception(f"Failed to fetch Last.fm tags for {artist} - {track}")
-        if cache_db is not None:
-            cache_db[key] = []
+def fetch_lastfm_tags(
+    artist: str,
+    track: str,
+    api_key: Optional[str] = None,
+    cache_db=None,  # ignored — kept for signature compat
+) -> list:
+    """
+    Fetch Last.fm tags for (artist, track).
+    Shim over lastfm_client.fetch_track_tags().
+    """
+    key = api_key or _API_KEY
+    if not key:
         return []
+    db_path = _CACHE_DB or str(Path.home() / ".playlistgen" / "lastfm.sqlite")
+    conn = init_cache_db(db_path)
+    tags = fetch_track_tags(artist, track, key, conn)
+    conn.close()
+    return tags
 
 
 def batch_tag_and_mood(
-    track_list, api_key=API_KEY, out_json_path=CACHE_PATH, shelve_path=None
+    track_list,
+    api_key=None,
+    out_json_path=None,
+    shelve_path=None,  # ignored — kept for signature compat
 ):
     """
-    For each (artist, track) in track_list:
-      - Look up cached tags, else pull from Last.fm
-      - Map to mood (using canonical_mood)
-      - Save results to disk as JSON and Shelve
+    Fetch tags + compute moods for all (artist, track) pairs.
+    Shim that delegates to lastfm_client.generate_tag_cache().
+    Returns (processed_count, 0).
     """
-    processed = 0
-    skipped = 0
-    Path(out_json_path).parent.mkdir(parents=True, exist_ok=True)
-    if shelve_path is None:
-        shelve_path = SHELVE_PATH
-    Path(shelve_path).parent.mkdir(parents=True, exist_ok=True)
+    key = api_key or _API_KEY
+    db_path = _CACHE_DB or str(Path.home() / ".playlistgen" / "lastfm.sqlite")
+    legacy = out_json_path or _TAG_MOOD_CACHE
 
-    # Load existing progress if resuming
-    if Path(out_json_path).exists():
-        with open(out_json_path, "r", encoding="utf-8") as f:
-            mood_db = json.load(f)
-    else:
-        mood_db = {}
-
-    tag_counts = collections.Counter()
-    with shelve.open(str(shelve_path)) as cache_db:
-        for artist, track in progress_bar(track_list, desc="Fetching tags/moods"):
-            track_id = f"{artist} - {track}".strip().lower()
-            if track_id in mood_db and mood_db[track_id].get("mood") is not None:
-                logging.info(f"Skipping {artist} - {track}: mood already cached")
-                skipped += 1
-                continue
-
-            logging.info(f"Processing {artist} - {track}")
-            processed += 1
-            tags = fetch_lastfm_tags(artist, track, api_key, cache_db)
-            for t in tags:
-                tag_counts[t.lower()] += 1
-
-            mood = canonical_mood(tags, tag_counts)
-            mood_db[track_id] = {"tags": tags, "mood": mood}
-
-            # Save every 100 items for crash-resume
-            if len(mood_db) % 100 == 0:
-                with open(out_json_path, "w", encoding="utf-8") as f:
-                    json.dump(mood_db, f, indent=2)
-
-        # Save once more at the end
-        with open(out_json_path, "w", encoding="utf-8") as f:
-            json.dump(mood_db, f, indent=2)
-    logging.info(f"Done: {len(mood_db)} tracks written to {out_json_path}")
-    logging.info(f"Mood-tagged {processed} tracks; skipped {skipped} tracks")
-    return processed, skipped
+    tag_db = generate_tag_cache(
+        list(track_list),
+        api_key=key or "",
+        db_path=db_path,
+        json_legacy_path=legacy,
+    )
+    return len(tag_db), 0
 
 
-def load_tag_mood_db(path=CACHE_PATH):
-    """Load the tag/mood cache if available, else return empty dict."""
-    p = Path(path)
-    if not p.exists():
-        return {}
-    with open(p, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-def generate_tag_mood_cache(itunes_json_path, spotify_dir, tag_mood_path=CACHE_PATH):
+def load_tag_mood_db(path=None) -> dict:
     """
-    Scan all tracks in the provided iTunes JSON and Spotify directory,
-    fetch Last.fm tags for each, and save them to the mood/tag cache as JSON.
+    Load the tag/mood database.
+
+    Tries the SQLite cache first; falls back to the legacy JSON file.
+    Returns a dict mapping "artist - track" → List[str] of tags.
     """
-    Path(tag_mood_path).parent.mkdir(parents=True, exist_ok=True)
+    db_path = _CACHE_DB or str(Path.home() / ".playlistgen" / "lastfm.sqlite")
+
+    # Prefer SQLite
+    if Path(db_path).exists():
+        return load_tag_db_from_sqlite(db_path)
+
+    # Fall back to old JSON cache and migrate it
+    json_path = path or _TAG_MOOD_CACHE
+    if json_path and Path(json_path).exists():
+        conn = init_cache_db(db_path)
+        migrate_json_to_sqlite(str(json_path), conn)
+        conn.close()
+        return load_tag_db_from_sqlite(db_path)
+
+    return {}
+
+
+def generate_tag_mood_cache(
+    itunes_json_path, spotify_dir, tag_mood_path=None
+):
+    """
+    Scan iTunes JSON + Spotify history, fetch Last.fm tags for all unique tracks.
+    Shim over lastfm_client.generate_tag_cache().
+    """
+    import os
+    from glob import glob
+
     tracks = []
-    # Load all tracks from iTunes JSON
+
     if itunes_json_path and Path(itunes_json_path).exists():
         with open(itunes_json_path, "r", encoding="utf-8") as f:
             data = json.load(f)
         for t in data.get("tracks", []):
-            artist = t.get("Artist")
-            name = t.get("Name")
-            if artist and name:
-                tracks.append((artist, name))
+            a = t.get("Artist")
+            n = t.get("Name")
+            if a and n:
+                tracks.append((a, n))
 
-    # Add all tracks from Spotify play history
     if spotify_dir:
-        from glob import glob
-        import os
+        for file in glob(os.path.join(str(spotify_dir), "*.json")):
+            try:
+                with open(file, "r", encoding="utf-8") as f:
+                    for entry in json.load(f):
+                        a = entry.get("master_metadata_album_artist_name")
+                        n = entry.get("master_metadata_track_name")
+                        if a and n:
+                            tracks.append((a, n))
+            except Exception as exc:
+                logging.warning("Could not read Spotify file %s: %s", file, exc)
 
-        for file in glob(os.path.join(spotify_dir, "*.json")):
-            with open(file, "r", encoding="utf-8") as f:
-                for entry in json.load(f):
-                    artist = entry.get("master_metadata_album_artist_name")
-                    title = entry.get("master_metadata_track_name")
-                    if artist and title:
-                        tracks.append((artist, title))
-
-    tracks = list(set(tracks))  # deduplicate
-
-    logging.info(f"Fetching tags for {len(tracks)} tracks. This can take a while...")
-    processed, skipped = batch_tag_and_mood(
-        tracks,
-        api_key=API_KEY,
-        out_json_path=tag_mood_path,
-        shelve_path=_cfg.get("CACHE_DB", None),
-    )
-    logging.info(f"Mood-tagged {processed} tracks; skipped {skipped} tracks")
-
-    # Sanity check
-    if Path(tag_mood_path).exists():
-        with open(tag_mood_path, "r", encoding="utf-8") as f:
-            tag_db = json.load(f)
-        logging.info(
-            f"Tag DB now contains {len(tag_db)} tracks. Example entry: {next(iter(tag_db.items())) if tag_db else 'None'}"
+    key = _API_KEY
+    if not key:
+        logging.warning(
+            "LASTFM_API_KEY not set — skipping tag cache generation. "
+            "Set it in config.yml or the environment."
         )
-    else:
-        logging.error(f"Tag mood DB file {tag_mood_path} was NOT written!")
+        return
+
+    db_path = _CACHE_DB or str(Path.home() / ".playlistgen" / "lastfm.sqlite")
+    legacy = tag_mood_path or _TAG_MOOD_CACHE
+
+    logging.info("Fetching Last.fm tags for %d tracks…", len(set(tracks)))
+    generate_tag_cache(
+        tracks,
+        api_key=key,
+        db_path=db_path,
+        json_legacy_path=legacy,
+    )

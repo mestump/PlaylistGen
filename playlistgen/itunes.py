@@ -1,129 +1,258 @@
-import plistlib
+"""
+iTunes library loading and local directory scanning for PlaylistGen.
+
+Provides three entry points:
+  convert_itunes_xml()    — Parse iTunes XML plist → slim JSON file.
+  load_itunes_json()      — Load that JSON into a DataFrame (adds Year, BPM, Duration, Album).
+  build_library_from_dir() — Scan a local directory for audio files using mutagen.
+  save_itunes_json()      — Persist a DataFrame back to the slim JSON format.
+"""
+
 import json
-import pandas as pd
-from pathlib import Path
 import logging
 import datetime
-from .utils import sanitize_label
-from .config import load_config
-from .playlist_builder import save_m3u
+import plistlib
+from pathlib import Path
+from urllib.parse import unquote
+
+import pandas as pd
+
+from .utils import sanitize_label  # noqa: F401 — re-exported for backward compat
 
 
-def convert_datetimes(obj):
-    """
-    Recursively convert datetime objects in dicts/lists to ISO format strings.
-    """
+# ---------------------------------------------------------------------------
+# iTunes XML → JSON
+# ---------------------------------------------------------------------------
+
+
+def _decode_location(raw: str) -> str:
+    """Convert an iTunes file:// URL to a plain filesystem path."""
+    if raw.startswith("file://localhost"):
+        return unquote(raw.replace("file://localhost", ""))
+    if raw.startswith("file://"):
+        return unquote(raw.replace("file://", ""))
+    return raw
+
+
+def _convert_datetimes(obj):
+    """Recursively convert datetime objects in dicts/lists to ISO strings."""
     if isinstance(obj, dict):
-        return {k: convert_datetimes(v) for k, v in obj.items()}
-    elif isinstance(obj, list):
-        return [convert_datetimes(i) for i in obj]
-    elif isinstance(obj, datetime.datetime):
+        return {k: _convert_datetimes(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_convert_datetimes(i) for i in obj]
+    if isinstance(obj, datetime.datetime):
         return obj.isoformat()
-    else:
-        return obj
+    return obj
 
 
 def convert_itunes_xml(in_path: str, out_path: str) -> None:
     """
-    Convert iTunes Music Library XML to a slimmed JSON format, handling datetime objects.
+    Convert an iTunes Music Library XML (plist) to a slim JSON file.
+
+    Decodes file:// URLs in the Location field to plain paths.
+    Converts datetime objects to ISO strings (JSON-serialisable).
     """
     with open(in_path, "rb") as f:
         plist = plistlib.load(f)
     tracks = list(plist.get("Tracks", {}).values())
-    # Convert any datetime objects to ISO strings
-    tracks = convert_datetimes(tracks)
+    tracks = _convert_datetimes(tracks)
+
+    # Decode file:// URLs in place so downstream code gets plain paths
+    for t in tracks:
+        if "Location" in t and isinstance(t["Location"], str):
+            t["Location"] = _decode_location(t["Location"])
+
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump({"tracks": tracks}, f, ensure_ascii=False, indent=2)
-    print(f"Converted {len(tracks)} tracks to {out_path}")
+    logging.info("Converted %d iTunes tracks to %s", len(tracks), out_path)
+
+
+# ---------------------------------------------------------------------------
+# Load iTunes JSON → DataFrame
+# ---------------------------------------------------------------------------
+
+_ITUNES_COL_MAP = {
+    # iTunes XML field name  →  canonical DataFrame column name
+    "Name": "Name",
+    "Title": "Name",
+    "Track Name": "Name",
+    "Artist": "Artist",
+    "Genre": "Genre",
+    "Location": "Location",
+    "Play Count": "Play Count",
+    "Skip Count": "Skip Count",
+    "Year": "Year",
+    "BPM": "BPM",
+    "Total Time": "Duration",   # Total Time is milliseconds in iTunes XML
+    "Album": "Album",
+}
+
+_KEEP_COLS = [
+    "Name", "Artist", "Genre", "Location",
+    "Play Count", "Skip Count", "Year", "BPM", "Duration", "Album",
+]
 
 
 def load_itunes_json(path: str) -> pd.DataFrame:
     """
-    Load slimmed iTunes JSON into a pandas DataFrame.
-    Handles missing or inconsistent column names and normalizes structure.
+    Load a slim iTunes JSON file into a normalised pandas DataFrame.
+
+    Preserves Year, BPM, Duration (converted from ms → seconds), and Album
+    in addition to the original columns so scoring and clustering work properly.
+    Decodes any remaining file:// URLs in the Location column.
     """
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
+
     arr = data.get("tracks", data)
     df = pd.DataFrame(arr)
 
-    # Normalize song name column
-    for col in ["Name", "Title", "Track Name"]:
-        if col in df.columns:
-            df.rename(columns={col: "Name"}, inplace=True)
-            break
-
-    # Only keep the key columns
-    col_map = {
-        "Artist": "Artist",
-        "Genre": "Genre",
-        "Location": "Location",
-        "Play Count": "Play Count",
-        "Skip Count": "Skip Count",
+    # Rename columns to canonical names
+    rename = {
+        old: new
+        for old, new in _ITUNES_COL_MAP.items()
+        if old in df.columns and old != new
     }
-    existing = {old: new for old, new in col_map.items() if old in df.columns}
-    df = df.rename(columns=existing)
-    cols = [
-        c
-        for c in ["Name", "Artist", "Genre", "Location", "Play Count", "Skip Count"]
-        if c in df.columns
-    ]
+    df = df.rename(columns=rename)
+
+    # Keep only the columns we care about (ignore columns not present)
+    cols = [c for c in _KEEP_COLS if c in df.columns]
     df = df[cols]
 
     # Drop rows missing essential data
     df.dropna(subset=["Name", "Artist"], inplace=True)
+    df.reset_index(drop=True, inplace=True)
 
     # Clean up Genre
     if "Genre" in df.columns:
-        df["Genre"] = df["Genre"].fillna("").astype(str).str.strip().str.title()
+        df["Genre"] = (
+            df["Genre"].fillna("").astype(str).str.strip().str.title()
+        )
+        df.loc[df["Genre"] == "", "Genre"] = None
 
     # Ensure play/skip counts are ints
-    for num in ["Play Count", "Skip Count"]:
-        if num in df.columns:
-            df[num] = pd.to_numeric(df[num], errors="coerce").fillna(0).astype(int)
+    for col in ("Play Count", "Skip Count"):
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
 
+    # Year: coerce to int, drop out-of-range values
+    if "Year" in df.columns:
+        df["Year"] = pd.to_numeric(df["Year"], errors="coerce")
+        df.loc[~df["Year"].between(1900, 2100, inclusive="neither"), "Year"] = None
+
+    # BPM: coerce to float
+    if "BPM" in df.columns:
+        df["BPM"] = pd.to_numeric(df["BPM"], errors="coerce")
+        df.loc[~df["BPM"].between(40, 300), "BPM"] = None
+
+    # Duration: iTunes stores Total Time in milliseconds — convert to seconds
+    if "Duration" in df.columns:
+        df["Duration"] = pd.to_numeric(df["Duration"], errors="coerce")
+        # Heuristic: values > 10000 are almost certainly milliseconds
+        big = df["Duration"].notna() & (df["Duration"] > 10000)
+        df.loc[big, "Duration"] = (df.loc[big, "Duration"] / 1000).round()
+
+    # Decode any remaining file:// URLs in Location
+    if "Location" in df.columns:
+        df["Location"] = df["Location"].apply(
+            lambda x: _decode_location(str(x)) if pd.notnull(x) else x
+        )
+
+    logging.info(
+        "Loaded %d tracks from %s  (year: %d, bpm: %d)",
+        len(df),
+        path,
+        df["Year"].notna().sum() if "Year" in df.columns else 0,
+        df["BPM"].notna().sum() if "BPM" in df.columns else 0,
+    )
     return df
 
 
-AUDIO_EXTS = {".mp3", ".m4a", ".flac", ".ogg", ".wav", ".aac", ".wma"}
+# ---------------------------------------------------------------------------
+# Local directory scan
+# ---------------------------------------------------------------------------
+
+AUDIO_EXTS = {".mp3", ".m4a", ".flac", ".ogg", ".wav", ".aac", ".wma", ".opus"}
 
 
 def build_library_from_dir(directory: str) -> pd.DataFrame:
-    """Recursively scan a directory for audio files and build a simple library."""
+    """
+    Recursively scan a directory for audio files and build a library DataFrame.
+
+    Tries to read embedded tags (year, BPM, genre, duration, album) via mutagen.
+    Falls back to parsing the filename as "Artist - Title" when mutagen returns
+    no artist/title, which is common for untagged files.
+    """
+    from .metadata import enrich_dataframe, MUTAGEN_AVAILABLE
+
     dir_path = Path(directory)
     if not dir_path.exists():
         raise FileNotFoundError(f"Library directory not found: {directory}")
 
     records = []
     for file in dir_path.rglob("*"):
-        if file.suffix.lower() in AUDIO_EXTS:
-            name = file.stem
-            artist = "Unknown"
-            if " - " in name:
-                parts = name.split(" - ", 1)
-                if parts[0].strip():
-                    artist = parts[0].strip()
+        if file.suffix.lower() not in AUDIO_EXTS:
+            continue
+
+        stem = file.stem
+        artist, name = "Unknown", stem
+        if " - " in stem:
+            parts = stem.split(" - ", 1)
+            if parts[0].strip():
+                artist = parts[0].strip()
                 name = parts[1].strip()
-            records.append(
-                {
-                    "Name": name,
-                    "Artist": artist,
-                    "Genre": "",
-                    "Location": str(file.resolve()),
-                    "Play Count": 0,
-                    "Skip Count": 0,
-                }
-            )
+
+        records.append(
+            {
+                "Name": name,
+                "Artist": artist,
+                "Genre": None,
+                "Location": str(file.resolve()),
+                "Play Count": 0,
+                "Skip Count": 0,
+                "Year": None,
+                "BPM": None,
+                "Duration": None,
+                "Album": None,
+            }
+        )
+
+    if not records:
+        logging.warning("No audio files found in %s", directory)
+        return pd.DataFrame(
+            columns=["Name", "Artist", "Genre", "Location",
+                     "Play Count", "Skip Count", "Year", "BPM", "Duration", "Album"]
+        )
 
     df = pd.DataFrame(records)
-    if not df.empty:
-        df.dropna(subset=["Name", "Artist"], inplace=True)
+    df.dropna(subset=["Name", "Artist"], inplace=True)
+    df.reset_index(drop=True, inplace=True)
+
+    # Enrich with mutagen tags (fills Name from title tag too if available)
+    if MUTAGEN_AVAILABLE:
+        df = enrich_dataframe(df)
+
+    logging.info(
+        "Scanned %d audio files from %s  (year: %d, bpm: %d)",
+        len(df),
+        directory,
+        df["Year"].notna().sum() if "Year" in df.columns else 0,
+        df["BPM"].notna().sum() if "BPM" in df.columns else 0,
+    )
     return df
 
 
-def save_itunes_json(df: pd.DataFrame, path: str) -> None:
-    """Save DataFrame in the slim iTunes JSON format."""
+# ---------------------------------------------------------------------------
+# Save slim JSON
+# ---------------------------------------------------------------------------
+
+
+def save_itunes_json(df: pd.DataFrame, path) -> None:
+    """Persist a library DataFrame in the slim iTunes JSON format."""
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
     data = {"tracks": df.to_dict(orient="records")}
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
+    with open(p, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+    logging.info("Saved %d tracks to %s", len(df), p)

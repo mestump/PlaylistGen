@@ -1,179 +1,469 @@
-# 🎧 PlaylistGen — Smart Daily Mix Generator
+# PlaylistGen — AI-Powered Smart Playlist Generator
 
-A command-line Python tool for generating smart, mood-aware, Daily-Mix style playlists using your **iTunes** and **Spotify** listening history. Inspired by Spotify's Daily Mix and iTunes metadata, this tool integrates your play/skip feedback, genres, and online mood classification to curate high-quality playlists with a personal touch.
-
----
-
-## 🚀 Features
-
-* 📦 **Dependency auto-check and install**
-* 🔄 **iTunes XML → JSON converter**
-* 🧠 **Spotify taste profile builder**
-* 📊 **Daily scoring of tracks using play/skip feedback**
-* 🌐 **Online genre lookup** (Last.fm → MusicBrainz)
-* 🎨 **Genre normalization & clustering**
-* 👥 **Artist diversity enforcement**
-* 🧩 **Fallback back-fill logic to meet playlist length**
-* 📂 **M3U playlist generation with intelligent naming**
-* 💿 **Optional Year-based mix generation**
-* 📁 **Manual library scanning with `--library-dir` flag**
-* 🖥️ **Clean progress bars for status updates**
+Generate Spotify Daily-Mix quality playlists from your **local music library**.
+PlaylistGen scores and clusters your tracks using your listening history, local
+audio analysis, and Claude AI — no streaming subscription required.
 
 ---
 
-## 🧰 Requirements
+## What it does
 
-* Python 3.8+
-* pip packages listed in `requirements.txt` (will auto-install on first run)
+PlaylistGen reads your iTunes / Music.app library (or a plain folder of music
+files), analyses every track, and produces one or more themed M3U playlists.
+Each run it:
+
+1. Extracts embedded tags (BPM, genre, mood, year, play count, skip count)
+   with **mutagen** — no internet required for this step.
+2. Analyses audio features (tempo, energy, brightness) locally with
+   **libROSA** — again, fully offline.
+3. Optionally enriches mood/energy metadata by asking **Claude** to classify
+   batches of 100 tracks at a time (~$0.001 / track, cached indefinitely).
+4. Builds a **session model** from your Spotify streaming-history JSON export,
+   learning which tracks you play together and which you've played recently.
+5. Scores every track by combining plays, skips, recency, and co-occurrence.
+6. Clusters the top tracks by audio similarity, mood, or genre and writes an
+   M3U file per cluster into `./mixes/`.
+7. Optionally hands the scored library to **Claude** for fully themed
+   playlist curation (e.g. "Late-Night Drive", "Morning Run").
 
 ---
 
-## 📂 Usage
+## Quick start
 
-### Export your iTunes Library
-
-1. Open iTunes (or Music app on macOS).
-2. Go to `File` → `Library` → `Export Library`.
-3. Save the exported XML file (e.g., `iTunes Music Library.xml`) in the root folder.
-
-If you manage your music files manually and don't use iTunes, skip the steps above and run the tool with `--library-dir /path/to/music`.
-
-### Export your Spotify History
-
-1. Visit [Spotify Privacy](https://www.spotify.com/us/account/privacy/) and request your data.
-2. Unzip and place all JSON files in the directory specified by your config (default: `./spotify_history`).
-
-### Generate Playlists (Main Pipeline)
-
-From your project root, run:
+### 1 — Install
 
 ```bash
-python -m playlistgen
+git clone https://github.com/mestump/PlaylistGen.git
+cd PlaylistGen
+pip install -e .
 ```
 
-Or, if installed as a script:
+> **Python 3.10+ is recommended.** All heavy dependencies (`librosa`, `numpy`,
+> `scikit-learn`) are listed in `requirements.txt` and installed automatically.
+
+### 2 — Export your iTunes library
+
+1. Open **iTunes** or **Music.app**.
+2. Go to **File → Library → Export Library**.
+3. Save the `.xml` file in the project root (or anywhere — you'll be asked for
+   the path on first run).
+
+If you don't use iTunes, skip this step; PlaylistGen can scan a plain music
+folder instead.
+
+### 3 — (Optional) Export your Spotify listening history
+
+Spotify's API no longer supports third-party playlist building, but you can
+download your own data:
+
+1. Go to [spotify.com → Account → Privacy settings](https://www.spotify.com/us/account/privacy/).
+2. Request **Extended streaming history** and wait for the email (usually
+   30 minutes to a few days).
+3. Unzip the download. You'll get one or more files named
+   `StreamingHistory_music_*.json` or `Streaming_History_Audio_*.json`.
+4. Note the folder path — you'll enter it during setup.
+
+The session model learns recency (how recently you played a track) and
+co-occurrence (tracks you often play in the same session) without calling any
+API.
+
+### 4 — Run
 
 ```bash
-playlistgen
+python -m playlistgen gui        # interactive menu (recommended for first run)
+python -m playlistgen            # non-interactive: generate a smart mix
 ```
 
-Running without arguments now launches an interactive menu where you can manage
-API keys, log into Spotify, recache metadata, or generate playlists.
+On first run, the interactive menu detects that no library is configured and
+launches a **setup wizard** that walks you through all the steps above.
 
-Main options (for non-interactive usage):
+### 5 — Find your playlists
 
-* `recache-moods`: Force a rebuild of the Last.fm mood cache
-* `--log-level`: Set log level (DEBUG, INFO, etc)
-* `--genre`: Filter mix to only tracks matching the given genre
-* `--mood`: Filter mix to only tracks matching the given mood
-* `--library-dir`: Scan a manual music directory instead of an iTunes library
+Playlists are saved as `.m3u` files in `./mixes/` (configurable). Open them
+with any media player that supports M3U, or sync to an iPod / DAP.
 
-Example:
+---
 
-```bash
-python -m playlistgen recache-moods
-```
+## Using the interactive menu
 
-Filter by genre or mood:
-
-```bash
-python -m playlistgen --genre "Rap"
-python -m playlistgen --mood "Epic"
-python -m playlistgen --genre "Rap" --mood "Energetic"
-```
-
-Generate a mix from a seed song using Last.fm similarity:
-
-```bash
-python -m playlistgen seed-song --song "Miles Davis - Blue In Green" --num 20
-```
-
-Launch the interactive text UI:
+Launch with:
 
 ```bash
 python -m playlistgen gui
 ```
 
+The menu is divided into four sections:
+
+### Generate Playlists
+
+| Option | What it does |
+|--------|-------------|
+| **Smart mix** | Runs the full pipeline; auto-selects the best clustering strategy (audio features → mood → genre) |
+| **Mix from a seed song** | Finds tracks that are acoustically similar to one song you name |
+| **Filter by mood** | Generates a playlist limited to a single mood (Happy, Chill, Energetic, etc.) |
+| **Filter by genre** | Generates a playlist limited to a single genre |
+
+### AI Features *(Anthropic API key required)*
+
+| Option | What it does |
+|--------|-------------|
+| **Claude: Smart playlist curation** | Sends your top-scored tracks to Claude (Sonnet) which groups them into 5–10 themed playlists with descriptive names |
+| **Claude: Enrich library metadata** | Sends tracks in batches of 100 to Claude (Haiku) which classifies each track's Mood, Energy, and Valence. Results are cached in SQLite so only new tracks are re-analysed |
+
+### Setup & Maintenance
+
+| Option | What it does |
+|--------|-------------|
+| **Configure API keys & data paths** | Set your Anthropic key, Last.fm key, Spotify history folder, etc. |
+| **Refresh metadata cache** | Re-fetches Last.fm tags for tracks not yet in the cache (only new tracks are fetched) |
+
+### Advanced
+
+| Option | What it does |
+|--------|-------------|
+| **Edit a config value** | Change any config key directly (shows categorised list) |
+
 ---
 
-## 🔧 Configuration
+## CLI reference
 
-Create a `config.yml` in the project root or `~/.playlistgen/config.yml` to override default settings (see the provided `config.yml` for details). Typical options include paths for your iTunes JSON, Spotify directory, and output folders.
-
-Example:
-
-```yaml
-ITUNES_JSON: ./itunes_slimmed.json
-SPOTIFY_DIR: ./spotify_history
-PROFILE_PATH: ./taste_profile.json
-OUTPUT_DIR: ./mixes
-LASTFM_API_KEY: your_lastfm_api_key
-CLUSTER_COUNT: 6
-MAX_PER_ARTIST: 5
-TRACKS_PER_MIX: 50
-YEAR_MIX_ENABLED: true
-YEAR_MIX_RANGE: 1
-CACHE_DB: ~/.playlistgen/mood_cache.sqlite
-SPOTIFY_REDIRECT_URI: http://localhost:8888/callback
+```
+python -m playlistgen [subcommand] [options]
 ```
 
-The `SPOTIFY_REDIRECT_URI` value must match one of the redirect URIs
-configured in your Spotify developer dashboard.
+Running without a subcommand generates a smart mix using your current config.
 
-To use online genre/mood detection, set your **Last.fm API key** in the config.
+### Global options
 
----
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--log-level LEVEL` | `INFO` | Logging verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
+| `--genre GENRE` | — | Restrict output to tracks matching this genre |
+| `--mood MOOD` | — | Restrict output to tracks matching this mood |
+| `--library-dir PATH` | — | Scan a folder of music files instead of iTunes |
+| `--ai-enrich` | off | Run Claude batch enrichment before clustering |
+| `--ai-curate` | off | Use Claude for full playlist curation instead of algorithmic clustering |
+| `--no-lastfm` | off | Disable Last.fm tag fetching entirely |
 
-## 🎼 How It Works
-
-1. **iTunes Track Import:** Load and normalize your library’s track and genre metadata.
-2. **Spotify Profile Build:** Analyze your play history for play/skip counts, artist/track/year preferences, and mood tags.
-3. **Genre Recovery:** Fill missing genres using Last.fm tags.
-4. **Track Scoring:** Apply custom scoring using plays, skips, artist and year affinity.
-5. **Clustering:** TF-IDF clustering by artist, genre, and track name.
-6. **Mix Creation:** Build year-based mixes (optional) and cluster-based mixes named with human-friendly mood and genre labels.
-7. **M3U Export:** Save playlists into the `./mixes` folder.
-
----
-
-## 🧠 Mood Detection (Patience is a Virtue)
-
-* Fetches mood probabilities from Last.fm.
-* Initial mood tagging can be very slow for large libraries.
-
----
-
-### Train Playlist Clustering Model
-
-Use the provided script to scrape playlists from Spotify and build a model for
-scoring candidates later:
+### Subcommands
 
 ```bash
-python -m playlistgen.train_model "rock" --limit 20 --output model.joblib
+# Launch the interactive menu
+python -m playlistgen gui
+
+# Build a playlist around one track
+python -m playlistgen seed-song --song "Artist - Title" --num 20
+
+# Force-refresh the metadata cache (Last.fm tags)
+python -m playlistgen recache-moods
+
+# Discover music similar to a genre query (requires Spotify credentials)
+python -m playlistgen discover --genre "Indie Rock" --limit 5
 ```
 
-The script reads Spotify credentials from command line options or the
-`SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET` environment variables.
-
----
-
-## 🧪 Development & Testing
-
-Run tests with:
+### Examples
 
 ```bash
-pytest
+# Quick smart mix
+python -m playlistgen
+
+# Chill playlist
+python -m playlistgen --mood "Chill"
+
+# Rock genre, verbose logging
+python -m playlistgen --genre "Rock" --log-level DEBUG
+
+# AI-curated playlists from top tracks
+python -m playlistgen --ai-curate
+
+# Enrich library metadata then generate
+python -m playlistgen --ai-enrich
+
+# Seed playlist: 30 tracks similar to "Blue In Green"
+python -m playlistgen seed-song --song "Miles Davis - Blue In Green" --num 30
+
+# Scan a music folder directly (no iTunes needed)
+python -m playlistgen --library-dir ~/Music/FLAC
 ```
 
 ---
 
-## ⚠️ Notes
+## Configuration
 
-* Ensure Spotify JSON files and iTunes JSON library are placed according to config paths.
-* Mood tag caching takes time on first run but speeds up after.
-* For most users, just run `python -m playlistgen` to generate playlists after setup.
+PlaylistGen looks for a config file in this order:
+
+1. `./config.yml` (project root)
+2. `~/.playlistgen/config.yml`
+
+All keys can also be set as **environment variables** (same name, upper case).
+The interactive menu writes to whichever config file was found (or creates
+`~/.playlistgen/config.yml` if neither exists).
+
+### Full config reference
+
+#### Library
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `ITUNES_JSON` | `./itunes_slimmed.json` | Path to cached iTunes JSON (auto-generated from XML) |
+| `ITUNES_XML` | *(none)* | Path to raw iTunes Library XML export |
+| `LIBRARY_DIR` | *(none)* | Scan this folder instead of iTunes |
+| `MUTAGEN_ENABLED` | `true` | Extract BPM, mood, genre tags from embedded audio tags |
+
+#### Output
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `OUTPUT_DIR` | `./mixes` | Where to write M3U playlist files |
+| `TRACKS_PER_MIX` | `50` | Target number of tracks per playlist |
+| `MAX_PER_ARTIST` | `4` | Max tracks per artist per playlist (diversity) |
+
+#### Clustering
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `CLUSTER_COUNT` | `6` | Number of clusters / playlists to generate |
+| `CLUSTER_STRATEGY` | `auto` | `auto`, `audio`, `mood`, or `tfidf`. Auto selects based on data coverage |
+| `CLUSTER_HYBRID` | `false` | Mood grouping first, then audio sub-clusters within each mood |
+| `YEAR_MIX_ENABLED` | `true` | Also generate a year-based mix |
+| `YEAR_MIX_RANGE` | `1` | ±years around the dominant year for year-based mix |
+
+#### AI Features (Anthropic)
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `ANTHROPIC_API_KEY` | *(none)* | Your Anthropic API key (`sk-ant-...`) |
+| `AI_ENHANCE` | `false` | Enable AI playlist naming |
+| `AI_BATCH_ENRICH` | `false` | Run Claude batch mood enrichment in the pipeline |
+| `AI_CURATE` | `false` | Use Claude for full playlist curation |
+| `AI_MODEL` | `claude-haiku-4-5-20251001` | Model for batch enrichment (cheap, fast) |
+| `AI_CURATE_MODEL` | `claude-sonnet-4-6` | Model for full curation (more capable) |
+| `AI_ENRICH_CACHE_DB` | `~/.playlistgen/claude_enrichment.sqlite` | SQLite cache for enrichment results |
+
+#### Session Model (Spotify history)
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `SPOTIFY_HISTORY_PATH` | *(none)* | Path to `StreamingHistory*.json` file or folder |
+| `SESSION_GAP_MINUTES` | `30` | Listening gap (minutes) that splits one session from the next |
+| `RECENCY_HALF_LIFE_DAYS` | `90` | How quickly recency scores decay (90 days → half weight) |
+
+#### Local Audio Analysis (libROSA)
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `LIBROSA_ENABLED` | `true` | Run local audio feature extraction (BPM, energy, brightness) |
+| `AUDIO_CACHE_DB` | `~/.playlistgen/audio.sqlite` | SQLite cache for audio analysis results |
+| `AUDIO_ANALYSIS_WORKERS` | `4` | Parallel threads for audio analysis |
+
+#### Last.fm (optional fallback)
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `LASTFM_API_KEY` | *(none)* | Last.fm API key (register at last.fm/api/account/create) |
+| `LASTFM_CACHE_DB` | `~/.playlistgen/lastfm.sqlite` | SQLite cache for Last.fm tag results |
+| `LASTFM_RATE_LIMIT_MS` | `200` | Milliseconds between Last.fm API calls |
+| `MOOD_CONCURRENCY` | `10` | Concurrent Last.fm requests |
+
+#### Taste profile & feedback
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `PROFILE_PATH` | `./taste_profile.json` | Legacy Spotify-derived taste profile (if present) |
+| `FEEDBACK_PATH` | `~/.playlistgen/feedback.json` | Stores skip/like signals from previous runs |
 
 ---
 
-This project is licensed under the Creative Commons Attribution-NonCommercial 4.0 International License.
-See LICENSE for details.
+## How it works
+
+```
+iTunes XML / music folder
+        │
+        ▼
+  1. Library load        mutagen extracts embedded tags (BPM, genre, year,
+                         play count, skip count, mood, rating)
+        │
+        ▼
+  2. Audio analysis      libROSA analyses each audio file locally:
+                         BPM · RMS energy · spectral brightness · zero-crossing rate
+                         Results cached in SQLite (only new/changed files re-analysed)
+        │
+        ▼
+  3. Metadata enrichment (priority order)
+         a. Claude batch enrichment (if AI_BATCH_ENRICH=true)
+            → sends 100 tracks at a time to Claude Haiku
+            → classifies Mood, Energy (1–10), Valence (1–10)
+            → cached indefinitely
+         b. Last.fm tag lookup (if LASTFM_API_KEY set and mood still unknown)
+         c. Embedded tag fallback (mutagen Mood/Comment field)
+        │
+        ▼
+  4. Session model       Reads Spotify StreamingHistory JSON files
+                         → splits plays into listening sessions (30-min gap)
+                         → builds co-occurrence matrix (tracks played together)
+                         → calculates recency scores (exponential decay)
+        │
+        ▼
+  5. Scoring             Each track gets a composite score:
+                         base = log(plays+1) − skip_penalty + genre_affinity
+                         × recency_multiplier (1.0–1.5×)
+                         + co_occurrence_boost (tracks played with top favourites)
+        │
+        ▼
+  6. Clustering          Strategy selected automatically or by config:
+                         audio   → KMeans on [BPM, energy, brightness, ZCR]
+                         mood    → group by mood label, then sub-cluster
+                         hybrid  → mood first, audio sub-clusters within mood
+                         tfidf   → TF-IDF on artist + genre + track name
+        │
+        ▼
+  7. Playlist build      • Top N tracks per cluster
+                         • Artist diversity enforced (MAX_PER_ARTIST)
+                         • Back-fill to meet TRACKS_PER_MIX
+                         • Claude names each playlist (if AI_ENHANCE=true)
+        │
+        ▼
+  8. M3U export          One .m3u file per playlist → OUTPUT_DIR/
+```
+
+---
+
+## AI features in depth
+
+### Claude: Batch library enrichment
+
+Sends your track list to Claude in batches of 100. Each batch gets a prompt
+asking for Mood, Energy (1–10), and Valence (1–10) for every track. Results
+are stored in a local SQLite database — subsequent runs skip already-enriched
+tracks.
+
+**Cost estimate:** ~$0.001 per track using Claude Haiku.
+**Privacy:** Only artist name, title, album, and year are sent — no audio
+data leaves your machine.
+
+Enable via config (`AI_BATCH_ENRICH: true`) or CLI (`--ai-enrich`) or the
+interactive menu.
+
+### Claude: Full playlist curation
+
+Sends the top 300 scored tracks to Claude Sonnet with a prompt asking it to
+group them into themed playlists. Claude returns JSON describing each playlist
+(name, description, track list). This replaces the algorithmic clustering step
+entirely when enabled.
+
+Enable via config (`AI_CURATE: true`) or CLI (`--ai-curate`) or the
+interactive menu.
+
+---
+
+## Session model in depth
+
+The session model replaces the old (now-defunct) Spotify API discovery. It
+reads the JSON files from your personal Spotify data export and learns two
+things:
+
+**Recency scores** — tracks you've played recently are scored higher. The
+score decays with a 90-day half-life by default:
+
+```
+recency_score = exp(−ln(2) × days_since_last_play / half_life)
+```
+
+**Co-occurrence scores** — if track A and track B are often played in the same
+listening session, they are considered related. Tracks that co-occur with your
+top 50 most-played tracks get a scoring boost.
+
+Both signals feed into the track scorer as multipliers / additive bonuses, so
+they influence which tracks make it into each playlist without overriding the
+primary play/skip quality signal.
+
+---
+
+## Audio analysis in depth
+
+libROSA analyses the first 2 minutes of each audio file to extract:
+
+| Feature | What it captures |
+|---------|-----------------|
+| BPM | Tempo — how fast the track feels |
+| Energy (RMS) | Loudness / intensity |
+| Spectral brightness | Treble-heaviness — bright vs. warm/dark |
+| Zero-crossing rate | Noisiness / distortion — useful for genre separation |
+
+These four features are normalised to [0, 1] and fed into KMeans clustering,
+producing groups of tracks that *sound* similar rather than just sharing a
+genre tag.
+
+Results are cached in SQLite keyed by file path + modification time, so only
+new or changed files are re-analysed.
+
+---
+
+## Development
+
+### Running tests
+
+```bash
+python -m pytest tests/ -v
+```
+
+132 tests across unit and integration suites. All pass on Python 3.10+.
+
+### Project structure
+
+```
+PlaylistGen/
+├── playlistgen/
+│   ├── __init__.py          public API exports
+│   ├── __main__.py          entry point (python -m playlistgen)
+│   ├── cli.py               argparse CLI
+│   ├── gui.py               questionary interactive menu
+│   ├── pipeline.py          10-stage orchestration pipeline
+│   ├── config.py            config loading / saving
+│   ├── itunes.py            iTunes XML → DataFrame
+│   ├── audio_analysis.py    libROSA feature extraction + SQLite cache
+│   ├── session_model.py     Spotify history → co-occurrence + recency
+│   ├── ai_enhancer.py       Claude batch enrichment + curation
+│   ├── clustering.py        KMeans / mood / TF-IDF clustering
+│   ├── scoring.py           composite track scorer
+│   ├── playlist_builder.py  M3U writer
+│   ├── seed_playlist.py     seed-song similarity search
+│   ├── tag_mood_service.py  Last.fm tag cache
+│   └── train_model.py       (legacy) Spotify scraping model trainer
+└── tests/
+    ├── test_audio_analysis.py
+    ├── test_session_model.py
+    ├── test_clustering*.py
+    ├── test_scoring*.py
+    └── ...
+```
+
+---
+
+## Troubleshooting
+
+**"No tracks found"** — Check that `ITUNES_JSON` or `LIBRARY_DIR` points to
+the right location. Run with `--log-level DEBUG` to see exactly what paths are
+being scanned.
+
+**Audio analysis is slow** — The first run analyses every file. Subsequent
+runs are instant (cached). Increase `AUDIO_ANALYSIS_WORKERS` if you have more
+CPU cores available.
+
+**Claude enrichment is expensive** — Use Claude Haiku (`claude-haiku-4-5-20251001`)
+which is the default for enrichment. Sonnet is only used for full curation.
+Costs are roughly $0.001 per track for enrichment (one-time, cached).
+
+**Last.fm rate limits** — Increase `LASTFM_RATE_LIMIT_MS` (default 200 ms).
+Last.fm allows ~5 requests/second on a free key.
+
+**Playlists are too similar** — Reduce `MAX_PER_ARTIST` or increase
+`CLUSTER_COUNT`. Try `CLUSTER_STRATEGY: audio` for more acoustically distinct
+groups.
+
+---
+
+## License
+
+Creative Commons Attribution-NonCommercial 4.0 International (CC BY-NC 4.0).
+See [LICENSE](LICENSE) for details.
