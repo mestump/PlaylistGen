@@ -197,99 +197,100 @@ def analyze_library(
         logging.warning("Audio cache DB init failed (%s) — skipping audio analysis.", exc)
         return df
 
-    df = df.copy()
+    try:
+        df = df.copy()
 
-    # Ensure feature columns exist
-    for col in ("Energy", "SpectralBrightness", "ZCR"):
-        if col not in df.columns:
-            df[col] = None
+        # Ensure feature columns exist
+        for col in ("Energy", "SpectralBrightness", "ZCR"):
+            if col not in df.columns:
+                df[col] = None
 
-    # Build work list
-    to_analyze: list = []
-    mtime_map: dict = {}
-    path_map: dict = {}
+        # Build work list
+        to_analyze: list = []
+        mtime_map: dict = {}
+        path_map: dict = {}
 
-    for idx, row in df.iterrows():
-        raw_loc = row.get("Location") or ""
-        if not raw_loc:
-            continue
-        path = _resolve_path(str(raw_loc))
-        if not os.path.isfile(path):
-            continue
-        try:
-            mtime = os.path.getmtime(path)
-        except OSError:
-            continue
-        cached = _cache_get(conn, path, mtime)
-        if cached:
-            if cached.get("energy") is not None:
-                df.at[idx, "Energy"] = cached["energy"]
-            if cached.get("spectral_brightness") is not None:
-                df.at[idx, "SpectralBrightness"] = cached["spectral_brightness"]
-            if cached.get("zcr") is not None:
-                df.at[idx, "ZCR"] = cached["zcr"]
-            # Backfill BPM from audio cache if mutagen missed it
-            if cached.get("bpm") and (
-                "BPM" not in df.columns
-                or pd.isnull(df.at[idx, "BPM"])
-                or df.at[idx, "BPM"] == 0
-            ):
-                df.at[idx, "BPM"] = cached["bpm"]
-        else:
-            to_analyze.append((idx, path))
-            mtime_map[idx] = mtime
-            path_map[idx] = path
-
-    if not to_analyze:
-        logging.info(
-            "Audio analysis: all %d tracks loaded from cache.", len(df)
-        )
-        conn.close()
-        return df
-
-    logging.info(
-        "Audio analysis: analyzing %d new tracks (cached: %d)…",
-        len(to_analyze),
-        len(df) - len(to_analyze),
-    )
-
-    completed = 0
-    failed = 0
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = {executor.submit(_analyze_one, t): t for t in to_analyze}
-        for future in as_completed(futures):
-            try:
-                idx, path, features = future.result()
-            except Exception as exc:
-                logging.warning("Audio analysis worker error: %s", exc)
-                failed += 1
+        for idx, row in df.iterrows():
+            raw_loc = row.get("Location") or ""
+            if not raw_loc:
                 continue
-            if features:
-                if features.get("energy") is not None:
-                    df.at[idx, "Energy"] = features["energy"]
-                if features.get("spectral_brightness") is not None:
-                    df.at[idx, "SpectralBrightness"] = features["spectral_brightness"]
-                if features.get("zcr") is not None:
-                    df.at[idx, "ZCR"] = features["zcr"]
-                if features.get("bpm") and (
+            path = _resolve_path(str(raw_loc))
+            if not os.path.isfile(path):
+                continue
+            try:
+                mtime = os.path.getmtime(path)
+            except OSError:
+                continue
+            cached = _cache_get(conn, path, mtime)
+            if cached:
+                if cached.get("energy") is not None:
+                    df.at[idx, "Energy"] = cached["energy"]
+                if cached.get("spectral_brightness") is not None:
+                    df.at[idx, "SpectralBrightness"] = cached["spectral_brightness"]
+                if cached.get("zcr") is not None:
+                    df.at[idx, "ZCR"] = cached["zcr"]
+                # Backfill BPM from audio cache if mutagen missed it
+                if cached.get("bpm") and (
                     "BPM" not in df.columns
                     or pd.isnull(df.at[idx, "BPM"])
                     or df.at[idx, "BPM"] == 0
                 ):
-                    df.at[idx, "BPM"] = features["bpm"]
-                try:
-                    _cache_set(conn, path, mtime_map[idx], features)
-                except Exception as exc:
-                    logging.warning("Audio cache write failed for %s: %s", path, exc)
+                    df.at[idx, "BPM"] = cached["bpm"]
             else:
-                failed += 1
-            completed += 1
-            if completed % 100 == 0:
-                logging.info(
-                    "Audio analysis: %d/%d complete.", completed, len(to_analyze)
-                )
+                to_analyze.append((idx, path))
+                mtime_map[idx] = mtime
+                path_map[idx] = path
 
-    conn.close()
+        if not to_analyze:
+            logging.info(
+                "Audio analysis: all %d tracks loaded from cache.", len(df)
+            )
+            return df
+
+        logging.info(
+            "Audio analysis: analyzing %d new tracks (cached: %d)…",
+            len(to_analyze),
+            len(df) - len(to_analyze),
+        )
+
+        completed = 0
+        failed = 0
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {executor.submit(_analyze_one, t): t for t in to_analyze}
+            for future in as_completed(futures):
+                try:
+                    idx, path, features = future.result()
+                except Exception as exc:
+                    logging.warning("Audio analysis worker error: %s", exc)
+                    failed += 1
+                    continue
+                if features:
+                    if features.get("energy") is not None:
+                        df.at[idx, "Energy"] = features["energy"]
+                    if features.get("spectral_brightness") is not None:
+                        df.at[idx, "SpectralBrightness"] = features["spectral_brightness"]
+                    if features.get("zcr") is not None:
+                        df.at[idx, "ZCR"] = features["zcr"]
+                    if features.get("bpm") and (
+                        "BPM" not in df.columns
+                        or pd.isnull(df.at[idx, "BPM"])
+                        or df.at[idx, "BPM"] == 0
+                    ):
+                        df.at[idx, "BPM"] = features["bpm"]
+                    try:
+                        _cache_set(conn, path, mtime_map[idx], features)
+                    except Exception as exc:
+                        logging.warning("Audio cache write failed for %s: %s", path, exc)
+                else:
+                    failed += 1
+                completed += 1
+                if completed % 100 == 0:
+                    logging.info(
+                        "Audio analysis: %d/%d complete.", completed, len(to_analyze)
+                    )
+
+    finally:
+        conn.close()
     energy_count = df["Energy"].notna().sum() if "Energy" in df.columns else 0
     succeeded = len(to_analyze) - failed
     if failed:

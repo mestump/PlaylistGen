@@ -258,8 +258,10 @@ def load_tag_db_from_sqlite(db_path: str) -> Dict[str, List[str]]:
     if not p.exists():
         return {}
     conn = sqlite3.connect(db_path)
-    rows = conn.execute("SELECT key, tags_json FROM tag_cache").fetchall()
-    conn.close()
+    try:
+        rows = conn.execute("SELECT key, tags_json FROM tag_cache").fetchall()
+    finally:
+        conn.close()
     result: Dict[str, List[str]] = {}
     for key, tags_json in rows:
         try:

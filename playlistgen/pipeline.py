@@ -169,6 +169,8 @@ def run_pipeline(
                 api_key=api_key,
                 model=cfg.get("AI_MODEL", "claude-haiku-4-5-20251001"),
                 cache_db=enrich_cache,
+                batch_size=int(cfg.get("AI_ENRICH_BATCH_SIZE", 150)),
+                rate_limit_ms=int(cfg.get("AI_ENRICH_RATE_LIMIT_MS", 0)),
             )
         except Exception as exc:
             logging.warning("Claude batch enrichment failed: %s — falling back.", exc)
@@ -200,7 +202,11 @@ def run_pipeline(
     # ------------------------------------------------------------------
     # Stage 5: Taste profile (Spotify listening history — optional)
     # ------------------------------------------------------------------
-    spotify_dir = Path(cfg.get("SPOTIFY_DIR", "./spotify_history"))
+    spotify_dir = Path(
+        cfg.get("SPOTIFY_DIR")
+        or cfg.get("SPOTIFY_HISTORY_PATH")
+        or "./spotify_history"
+    )
     profile_path = Path(cfg.get("PROFILE_PATH", "./taste_profile.json"))
 
     if spotify_dir.exists() and any(spotify_dir.rglob("*.json")):
@@ -303,8 +309,20 @@ def run_pipeline(
             min_tracks_per_year=min_tracks_per_year,
             strategy=cluster_strategy,
         )
-        random.shuffle(clusters)
-        selected = clusters[:num_playlists]
+        # Mood strategy produces exactly one cluster per mood — don't cap.
+        # For other strategies, respect num_playlists.
+        effective_strategy = cluster_strategy
+        if effective_strategy == "auto":
+            mood_cov = (
+                scored_df["Mood"].notna() & (scored_df["Mood"] != "Unknown")
+            ).mean() if "Mood" in scored_df.columns else 0.0
+            effective_strategy = "mood" if mood_cov > 0.5 else cluster_strategy
+        if effective_strategy == "mood" or cluster_by_mood:
+            random.shuffle(clusters)
+            selected = clusters
+        else:
+            random.shuffle(clusters)
+            selected = clusters[:num_playlists]
         labelled = [(name_cluster(cl, i), cl) for i, cl in enumerate(selected)]
 
     # ------------------------------------------------------------------
@@ -331,7 +349,7 @@ def run_pipeline(
     playlists = build_playlists(
         [cl for _, cl in labelled],
         scored_df,
-        num_playlists=num_playlists,
+        num_playlists=len(labelled),
         name_fn=lambda cl, i: labelled[i][0],
     )
 

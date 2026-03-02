@@ -77,8 +77,10 @@ def _test_spotify_path(path_str: str) -> tuple[bool, str]:
             return False, "No streaming history records found in that path."
         n_plays = len(df)
         n_tracks = df["track_id"].nunique() if "track_id" in df.columns else "?"
-        date_min = df["timestamp"].min().strftime("%Y-%m-%d") if "timestamp" in df.columns else "?"
-        date_max = df["timestamp"].max().strftime("%Y-%m-%d") if "timestamp" in df.columns else "?"
+        ts_min = df["timestamp"].min() if "timestamp" in df.columns else None
+        ts_max = df["timestamp"].max() if "timestamp" in df.columns else None
+        date_min = ts_min.strftime("%Y-%m-%d") if ts_min is not None and pd.notna(ts_min) else "?"
+        date_max = ts_max.strftime("%Y-%m-%d") if ts_max is not None and pd.notna(ts_max) else "?"
         return True, (
             f"{n_plays:,} plays  |  {n_tracks:,} unique tracks  |  "
             f"{date_min} – {date_max}"

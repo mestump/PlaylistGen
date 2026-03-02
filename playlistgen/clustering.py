@@ -64,13 +64,15 @@ def name_cluster(df: pd.DataFrame = None, i: int = None) -> str:
     mood, genre = None, None
     if df is not None:
         if "Mood" in df.columns and df["Mood"].notnull().any():
-            candidates = df["Mood"][df["Mood"] != "Unknown"]
-            if not candidates.empty:
-                mood = candidates.mode().iloc[0]
+            candidates = df["Mood"][df["Mood"].notna() & (df["Mood"] != "Unknown")]
+            m = candidates.mode()
+            if not m.empty:
+                mood = m.iloc[0]
         if "Genre" in df.columns and df["Genre"].notnull().any():
-            candidates = df["Genre"][df["Genre"].str.lower() != ""]
-            if not candidates.empty:
-                genre = candidates.mode().iloc[0]
+            candidates = df["Genre"][df["Genre"].notna() & (df["Genre"].str.lower() != "")]
+            m = candidates.mode()
+            if not m.empty:
+                genre = m.iloc[0]
     if mood or genre:
         return humanize_label(mood, genre)
     return f"Cluster {(i or 0) + 1}"

@@ -22,6 +22,8 @@ from typing import List, Optional, Tuple
 
 import pandas as pd
 
+from .utils import progress_bar
+
 
 def _summarise_cluster(df: pd.DataFrame) -> str:
     """
@@ -271,8 +273,9 @@ def batch_enrich_metadata(
     df: pd.DataFrame,
     api_key: str,
     model: str = "claude-haiku-4-5-20251001",
-    batch_size: int = 100,
+    batch_size: int = 150,
     cache_db: str = None,
+    rate_limit_ms: int = 0,
 ) -> pd.DataFrame:
     """
     Batch-enrich track metadata (Mood, Energy, Valence) using Claude.
@@ -283,11 +286,14 @@ def batch_enrich_metadata(
     Cost estimate: ~$0.001/track with Haiku (one-time; cached thereafter).
 
     Args:
-        df:         Library DataFrame with Artist, Name, Genre, BPM columns.
-        api_key:    Anthropic API key.
-        model:      Claude model ID (Haiku recommended for cost/speed).
-        batch_size: Tracks per API call (default 100).
-        cache_db:   SQLite cache path.
+        df:             Library DataFrame with Artist, Name, Genre, BPM columns.
+        api_key:        Anthropic API key.
+        model:          Claude model ID (Haiku recommended for cost/speed).
+        batch_size:     Tracks per API call (default 150).
+        cache_db:       SQLite cache path.
+        rate_limit_ms:  Minimum ms between API calls (0 = no pacing). Set e.g.
+                        1000 to send at most one batch per second and avoid
+                        exhausting Claude's RPM quota.
 
     Returns:
         DataFrame with Mood, Energy, Valence columns filled where previously missing.
@@ -373,37 +379,75 @@ def batch_enrich_metadata(
             conn.close()
         return df
 
-    logging.info(
-        "Batch enrichment: enriching %d tracks via Claude…", len(to_enrich)
-    )
     enriched_count = 0
+    num_batches = (len(to_enrich) + batch_size - 1) // batch_size
+    logging.info(
+        "Batch enrichment: %d tracks in %d batches of up to %d…",
+        len(to_enrich), num_batches, batch_size,
+    )
 
-    for batch_start in range(0, len(to_enrich), batch_size):
+    _last_batch_time: float = 0.0
+    bar = progress_bar(range(num_batches), desc="Claude enrichment", total=num_batches)
+
+    for batch_num in bar:
+        batch_start = batch_num * batch_size
         batch = to_enrich[batch_start : batch_start + batch_size]
+
+        # Inter-batch rate limiting
+        if rate_limit_ms > 0:
+            elapsed = time.time() - _last_batch_time
+            wait = (rate_limit_ms / 1000.0) - elapsed
+            if wait > 0:
+                time.sleep(wait)
+
         user_msg = "Classify these tracks:\n" + "\n".join(
             f"{i + 1}. {item[2]}" for i, item in enumerate(batch)
         )
-        try:
-            message = client.messages.create(
-                model=model,
-                max_tokens=2048,
-                system=_ENRICH_SYSTEM,
-                messages=[{"role": "user", "content": user_msg}],
-            )
-            raw = message.content[0].text.strip()
-            if raw.startswith("```"):
-                raw = raw.split("```")[1].lstrip("json").strip()
-            results = json.loads(raw)
-            if isinstance(results, dict):
-                results = results.get("results", results.get("tracks", []))
-        except Exception as exc:
-            logging.debug("Claude enrichment batch failed: %s", exc)
+
+        # Retry with exponential backoff: 2s, 4s, 8s
+        results = None
+        for attempt in range(3):
+            try:
+                message = client.messages.create(
+                    model=model,
+                    max_tokens=2048,
+                    system=_ENRICH_SYSTEM,
+                    messages=[{"role": "user", "content": user_msg}],
+                )
+                _last_batch_time = time.time()
+                raw = message.content[0].text.strip()
+                if raw.startswith("```"):
+                    raw = raw.split("```")[1].lstrip("json").strip()
+                results = json.loads(raw)
+                if isinstance(results, dict):
+                    results = results.get("results", results.get("tracks", []))
+                break
+            except Exception as exc:
+                backoff = 2 ** (attempt + 1)  # 2, 4, 8 seconds
+                if attempt < 2:
+                    logging.warning(
+                        "Claude enrichment batch %d/%d failed (attempt %d/3): %s. "
+                        "Retrying in %ds…",
+                        batch_num + 1, num_batches, attempt + 1, exc, backoff,
+                    )
+                    time.sleep(backoff)
+                else:
+                    logging.warning(
+                        "Claude enrichment batch %d/%d failed after 3 attempts: %s. "
+                        "Skipping batch.",
+                        batch_num + 1, num_batches, exc,
+                    )
+
+        if results is None:
             continue
 
         for item in results:
             if not isinstance(item, dict):
                 continue
-            idx_1based = item.get("idx", 0)
+            try:
+                idx_1based = int(item.get("idx", 0))
+            except (TypeError, ValueError):
+                continue
             if not (1 <= idx_1based <= len(batch)):
                 continue
             orig_idx, key, _ = batch[idx_1based - 1]
@@ -440,10 +484,16 @@ def batch_enrich_metadata(
                             int(time.time()),
                         ),
                     )
-                    conn.commit()
                 except Exception:
                     pass
             enriched_count += 1
+
+        # Commit once per batch (not per result)
+        if conn:
+            try:
+                conn.commit()
+            except Exception:
+                pass
 
     if conn:
         conn.close()

@@ -154,7 +154,8 @@ def build_sessions(
                     if current:
                         sessions.append(current)
                     current = []
-            except Exception:
+            except (AttributeError, TypeError):
+                # ts or prev_ts is NaT or an unexpected type — skip gap check
                 pass
         current.append(track_id)
         prev_ts = ts

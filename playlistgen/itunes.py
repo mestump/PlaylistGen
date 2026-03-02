@@ -139,7 +139,7 @@ def load_itunes_json(path: str) -> pd.DataFrame:
     # Year: coerce to int, drop out-of-range values
     if "Year" in df.columns:
         df["Year"] = pd.to_numeric(df["Year"], errors="coerce")
-        df.loc[~df["Year"].between(1900, 2100, inclusive="neither"), "Year"] = None
+        df.loc[~df["Year"].between(1900, 2100, inclusive="both"), "Year"] = None
 
     # BPM: coerce to float
     if "BPM" in df.columns:

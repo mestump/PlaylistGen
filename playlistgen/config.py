@@ -63,6 +63,8 @@ def load_config(path: str = None) -> dict:
         "AI_ENRICH_CACHE_DB": str(
             Path.home() / ".playlistgen" / "claude_enrichment.sqlite"
         ),
+        "AI_ENRICH_BATCH_SIZE": 150,
+        "AI_ENRICH_RATE_LIMIT_MS": 0,
         # Phase 2: clustering strategy
         "CLUSTER_STRATEGY": "auto",
         "CLUSTER_HYBRID": False,
