@@ -169,6 +169,8 @@ def run_pipeline(
                 api_key=api_key,
                 model=cfg.get("AI_MODEL", "claude-haiku-4-5-20251001"),
                 cache_db=enrich_cache,
+                batch_size=int(cfg.get("AI_ENRICH_BATCH_SIZE", 150)),
+                rate_limit_ms=int(cfg.get("AI_ENRICH_RATE_LIMIT_MS", 0)),
             )
         except Exception as exc:
             logging.warning("Claude batch enrichment failed: %s — falling back.", exc)
