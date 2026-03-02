@@ -116,15 +116,17 @@ The menu is divided into four sections:
 
 | Option | What it does |
 |--------|-------------|
-| **Generate AI enrichment prompt** | Writes a self-contained prompt file you paste into Claude.ai, ChatGPT, Gemini, etc. The AI's JSON response is pasted back into the file and imported — results go into the same cache as the API path |
+| **Generate Claude session file** | Writes a single `.md` file containing **all** pending enrichment batches. Upload it to Claude.ai and Claude processes them sequentially, saving a JSON artifact per batch — ideal for large libraries |
+| **Generate AI enrichment prompt** | Writes a single-batch prompt you paste into ChatGPT, Gemini, etc. Run again after each import to get the next batch |
 | **Generate AI curation prompt** | Same paste-in workflow for full playlist curation — the AI groups your tracks into themed playlists, you paste the response back, and the M3Us are written immediately |
-| **Import AI response from file** | Import a previously generated prompt file that already has the AI response pasted in — useful if you want to do the AI step separately from the import |
+| **Import AI response from file** | Import a previously generated prompt file or raw JSON artifact — auto-detects enrich vs curate mode |
 
 ### Setup & Maintenance
 
 | Option | What it does |
 |--------|-------------|
 | **Configure API keys & data paths** | Set your Anthropic key, Last.fm key, Spotify history folder, etc. |
+| **Re-configure Spotify history** | Update the Spotify streaming history path with live validation — shows play count and date range immediately, lets you retry if the path is wrong |
 | **Refresh metadata cache** | Re-fetches Last.fm tags for tracks not yet in the cache (only new tracks are fetched) |
 
 ### Advanced
@@ -170,16 +172,20 @@ python -m playlistgen recache-moods
 # Discover music similar to a genre query (requires Spotify credentials)
 python -m playlistgen discover --genre "Indie Rock" --limit 5
 
-# Generate a paste-in AI enrichment prompt (no API key needed)
+# Generate a Claude session file — all batches in one upload (recommended for Claude)
+python -m playlistgen export-ai-session
+python -m playlistgen export-ai-session --batch-size 500   # larger batches if your library is huge
+
+# Generate a single-batch enrichment prompt (for ChatGPT / Gemini / other AIs)
 python -m playlistgen export-ai-prompt --mode enrich
-python -m playlistgen export-ai-prompt --mode enrich --batch-size 500   # for Claude.ai
+python -m playlistgen export-ai-prompt --mode enrich --batch-size 100   # smaller for Gemini free
 
 # Generate a paste-in AI curation prompt
 python -m playlistgen export-ai-prompt --mode curate --n-playlists 8
 
-# Import the AI's JSON response (auto-detects enrich vs curate)
+# Import any AI response — plain JSON artifact from Claude.ai, or a .txt prompt file
+python -m playlistgen import-ai-result batch_1_enrichment.json
 python -m playlistgen import-ai-result playlistgen_enrich_prompt.txt
-python -m playlistgen import-ai-result response.json   # plain JSON file also works
 ```
 
 ### Examples
@@ -379,29 +385,58 @@ interactive menu.
 
 If you don't have an Anthropic API key — or prefer to use your existing
 Claude.ai, ChatGPT Plus, or Gemini Advanced subscription — PlaylistGen can
-generate a self-contained prompt file you paste into any AI and import the
-response back.
+generate prompt files you paste into any AI and import the response back.
 
-**Enrichment workflow:**
+#### Claude.ai — session file (recommended for large libraries)
+
+The session file puts **all pending batches in a single `.md` file** you
+upload to Claude.ai. Claude processes each batch sequentially and saves a
+downloadable JSON artifact per batch — no copy-pasting required.
 
 ```bash
-# 1. Generate the prompt
-python -m playlistgen export-ai-prompt --mode enrich
+# 1. Generate the session file (all batches, auto-sized)
+python -m playlistgen export-ai-session
 
-# → Writes playlistgen_enrich_prompt.txt with clear instructions inside.
+# → Writes playlistgen_enrichment_session.md
 
-# 2. Open the file.  Copy everything between PROMPT START and PROMPT END.
-#    Paste into Claude.ai / ChatGPT / Gemini.  Copy the JSON response.
-#    Paste it into the RESPONSE section at the bottom of the file.
+# 2. Upload to Claude.ai (drag & drop the .md file into the chat)
+# 3. Send: "Please process this enrichment session"
+# 4. Claude works through each batch and creates batch_N_enrichment.json artifacts
+# 5. Download each artifact as Claude creates it, then import:
 
-# 3. Import — results go into the same SQLite cache as the API path.
-python -m playlistgen import-ai-result playlistgen_enrich_prompt.txt
+python -m playlistgen import-ai-result batch_1_enrichment.json
+python -m playlistgen import-ai-result batch_2_enrichment.json
+# ... repeat for each batch
 
-# 4. Run normally — enriched data is picked up automatically.
+# 6. Run normally — enriched data is used automatically.
 python -m playlistgen
 ```
 
-**Curation workflow:**
+Each import is independent and idempotent — you can import batch 2 while
+Claude is still working on batch 3, and re-running import on an already-
+imported file is a safe no-op.
+
+#### Other AIs (ChatGPT, Gemini) — single-batch paste-in
+
+For AIs that don't support file artifacts, generate one batch at a time,
+paste the prompt, and paste the response back into the file:
+
+```bash
+# Generate one batch
+python -m playlistgen export-ai-prompt --mode enrich
+
+# → playlistgen_enrich_prompt.txt
+# Copy the PROMPT START/END section → paste into AI → copy JSON response
+# Paste response into the RESPONSE section at the bottom of the file, then:
+
+python -m playlistgen import-ai-result playlistgen_enrich_prompt.txt
+
+# Run again to get the next batch (already-imported tracks are skipped)
+python -m playlistgen export-ai-prompt --mode enrich
+# → repeat until all tracks are enriched
+```
+
+**Curation workflow (any AI):**
 
 ```bash
 python -m playlistgen export-ai-prompt --mode curate --n-playlists 6
@@ -412,21 +447,11 @@ python -m playlistgen import-ai-result playlistgen_curate_prompt.txt
 
 **Recommended batch sizes by AI:**
 
-| AI | Output token limit | Enrich tracks per batch | Notes |
-|----|-------------------|------------------------|-------|
-| Claude.ai (any plan) | 32 K | up to **500** | Best choice — large output window |
-| ChatGPT Plus (GPT-4o) | 16 K | up to **250** | Use `--batch-size 250` |
-| Gemini Advanced | 8 K | up to **100** | Use `--batch-size 100` |
-
-For large libraries, generate multiple batches:
-
-```bash
-python -m playlistgen export-ai-prompt --batch 1 --batch-size 300
-python -m playlistgen export-ai-prompt --batch 2 --batch-size 300
-# process each file, then import both
-python -m playlistgen import-ai-result playlistgen_enrich_prompt_1.txt
-python -m playlistgen import-ai-result playlistgen_enrich_prompt_2.txt
-```
+| AI | Output token limit | Tracks per batch | Notes |
+|----|-------------------|-----------------|-------|
+| Claude.ai (any plan) | 32 K | up to **500** | Use session file — no copy-pasting |
+| ChatGPT Plus (GPT-4o) | 16 K | up to **250** | `--batch-size 250` |
+| Gemini Advanced | 8 K | up to **100** | `--batch-size 100` |
 
 The import is idempotent — re-importing an already-cached track is a no-op.
 
@@ -527,10 +552,16 @@ being scanned.
 runs are instant (cached). Increase `AUDIO_ANALYSIS_WORKERS` if you have more
 CPU cores available.
 
-**Don't have an Anthropic API key?** — Use the paste-in workflow instead.
-Run `python -m playlistgen export-ai-prompt --mode enrich`, paste the prompt
-into Claude.ai (free tier works), and import the response. No key or payment
-needed beyond whatever AI you already use.
+**Don't have an Anthropic API key?** — Use the paste-in workflow. For
+Claude.ai, run `python -m playlistgen export-ai-session` to generate a single
+file covering your whole library, upload it, and import each batch artifact.
+For ChatGPT/Gemini, run `export-ai-prompt --mode enrich` and paste one batch
+at a time.
+
+**Spotify history didn't import correctly at setup** — Go to
+`Setup → Re-configure Spotify history` in the interactive menu. It validates
+the path immediately and shows the play count and date range so you can
+confirm it loaded before saving.
 
 **Claude enrichment is expensive** — Use Claude Haiku (`claude-haiku-4-5-20251001`)
 which is the default for enrichment. Sonnet is only used for full curation.

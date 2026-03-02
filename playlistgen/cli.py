@@ -140,6 +140,30 @@ def main():
         help="Scan a local music directory (bypasses iTunes XML)",
     )
 
+    session_parser = subparsers.add_parser(
+        "export-ai-session",
+        help=(
+            "Generate a single Markdown file containing ALL enrichment batches "
+            "for upload to Claude.ai — Claude processes each batch and saves a "
+            "JSON artifact per batch; import each with import-ai-result"
+        ),
+    )
+    session_parser.add_argument(
+        "--output",
+        help="Output .md file path (default: playlistgen_enrichment_session.md)",
+    )
+    session_parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=300,
+        metavar="N",
+        help="Tracks per batch (default: 300 — safe for Claude.ai's output window)",
+    )
+    session_parser.add_argument(
+        "--library-dir",
+        help="Scan a local music directory (bypasses iTunes XML)",
+    )
+
     import_parser = subparsers.add_parser(
         "import-ai-result",
         help=(
@@ -267,6 +291,26 @@ def main():
                 out_path=args.output,
                 max_tracks=args.max_tracks,
             )
+
+    elif args.command == "export-ai-session":
+        from .prompt_io import export_enrichment_session
+
+        lib_dir = getattr(args, "library_dir", None)
+        if lib_dir:
+            from .itunes import build_library_from_dir
+            library_df = build_library_from_dir(lib_dir)
+        else:
+            from .pipeline import ensure_itunes_json, ensure_tag_cache
+            from .itunes import load_itunes_json
+            itunes_json = ensure_itunes_json(cfg)
+            ensure_tag_cache(cfg, itunes_json)
+            library_df = load_itunes_json(str(itunes_json))
+
+        export_enrichment_session(
+            library_df,
+            out_path=getattr(args, "output", None),
+            batch_size=args.batch_size,
+        )
 
     elif args.command == "import-ai-result":
         from .prompt_io import import_enrichment_result, import_curation_result, _detect_mode
