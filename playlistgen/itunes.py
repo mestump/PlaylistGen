@@ -176,13 +176,18 @@ def load_itunes_json(path: str) -> pd.DataFrame:
 AUDIO_EXTS = {".mp3", ".m4a", ".flac", ".ogg", ".wav", ".aac", ".wma", ".opus"}
 
 
-def build_library_from_dir(directory: str) -> pd.DataFrame:
+def build_library_from_dir(directory: str, mutagen_enabled: bool = True) -> pd.DataFrame:
     """
     Recursively scan a directory for audio files and build a library DataFrame.
 
     Tries to read embedded tags (year, BPM, genre, duration, album) via mutagen.
     Falls back to parsing the filename as "Artist - Title" when mutagen returns
     no artist/title, which is common for untagged files.
+
+    Args:
+        directory:       Path to the music folder to scan recursively.
+        mutagen_enabled: If False, skip embedded tag extraction (respects
+                         MUTAGEN_ENABLED config flag).
     """
     from .metadata import enrich_dataframe, MUTAGEN_AVAILABLE
 
@@ -230,8 +235,10 @@ def build_library_from_dir(directory: str) -> pd.DataFrame:
     df.reset_index(drop=True, inplace=True)
 
     # Enrich with mutagen tags (fills Name from title tag too if available)
-    if MUTAGEN_AVAILABLE:
-        df = enrich_dataframe(df)
+    if mutagen_enabled and MUTAGEN_AVAILABLE:
+        df = enrich_dataframe(df, enabled=True)
+    elif not mutagen_enabled:
+        logging.info("Mutagen tag extraction disabled (MUTAGEN_ENABLED=false).")
 
     logging.info(
         "Scanned %d audio files from %s  (year: %d, bpm: %d)",

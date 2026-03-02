@@ -32,6 +32,10 @@ try:
     LIBROSA_AVAILABLE = True
 except ImportError:
     LIBROSA_AVAILABLE = False
+    logging.warning(
+        "librosa not installed — local audio feature extraction (BPM, energy, "
+        "spectral brightness) is disabled. Install with: pip install librosa"
+    )
 
 
 _SCHEMA = """
@@ -144,7 +148,7 @@ def analyze_track(file_path: str) -> dict:
             "zcr": zcr,
         }
     except Exception as exc:
-        logging.debug("Audio analysis failed for %s: %s", file_path, exc)
+        logging.warning("Audio analysis failed for %s: %s", file_path, exc)
         return {}
 
 
@@ -180,9 +184,9 @@ def analyze_library(
         return df
 
     if not LIBROSA_AVAILABLE:
-        logging.info(
-            "librosa not installed — audio feature analysis skipped. "
-            "Install with: pip install librosa"
+        logging.warning(
+            "librosa is not installed — audio feature extraction skipped. "
+            "Clustering will fall back to mood/genre. Install: pip install librosa"
         )
         return df
 
@@ -250,13 +254,15 @@ def analyze_library(
     )
 
     completed = 0
+    failed = 0
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {executor.submit(_analyze_one, t): t for t in to_analyze}
         for future in as_completed(futures):
             try:
                 idx, path, features = future.result()
             except Exception as exc:
-                logging.debug("Audio analysis worker error: %s", exc)
+                logging.warning("Audio analysis worker error: %s", exc)
+                failed += 1
                 continue
             if features:
                 if features.get("energy") is not None:
@@ -273,8 +279,10 @@ def analyze_library(
                     df.at[idx, "BPM"] = features["bpm"]
                 try:
                     _cache_set(conn, path, mtime_map[idx], features)
-                except Exception:
-                    pass  # cache write failure is non-fatal
+                except Exception as exc:
+                    logging.warning("Audio cache write failed for %s: %s", path, exc)
+            else:
+                failed += 1
             completed += 1
             if completed % 100 == 0:
                 logging.info(
@@ -283,9 +291,17 @@ def analyze_library(
 
     conn.close()
     energy_count = df["Energy"].notna().sum() if "Energy" in df.columns else 0
-    logging.info(
-        "Audio analysis complete: Energy populated for %d / %d tracks.",
-        energy_count,
-        len(df),
-    )
+    succeeded = len(to_analyze) - failed
+    if failed:
+        logging.warning(
+            "Audio analysis: %d/%d tracks succeeded, %d failed (unreadable format "
+            "or codec missing — those tracks will use mood/genre clustering instead).",
+            succeeded, len(to_analyze), failed,
+        )
+    else:
+        logging.info(
+            "Audio analysis complete: %d tracks analysed, Energy populated for "
+            "%d / %d tracks total.",
+            succeeded, energy_count, len(df),
+        )
     return df

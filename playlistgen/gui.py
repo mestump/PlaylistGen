@@ -61,7 +61,33 @@ def _status_line(cfg: dict) -> str:
     return "  " + " | ".join(parts)
 
 
-def _welcome_first_run(cfg: dict) -> bool:
+def _test_spotify_path(path_str: str) -> tuple[bool, str]:
+    """
+    Try loading the Spotify history at path_str.
+    Returns (ok, summary_message).
+    """
+    from pathlib import Path as _Path
+    p = _Path(path_str)
+    if not p.exists():
+        return False, f"Path not found: {p}"
+    try:
+        from .session_model import load_streaming_history
+        df = load_streaming_history(str(p))
+        if df.empty:
+            return False, "No streaming history records found in that path."
+        n_plays = len(df)
+        n_tracks = df["track_id"].nunique() if "track_id" in df.columns else "?"
+        date_min = df["timestamp"].min().strftime("%Y-%m-%d") if "timestamp" in df.columns else "?"
+        date_max = df["timestamp"].max().strftime("%Y-%m-%d") if "timestamp" in df.columns else "?"
+        return True, (
+            f"{n_plays:,} plays  |  {n_tracks:,} unique tracks  |  "
+            f"{date_min} – {date_max}"
+        )
+    except Exception as exc:
+        return False, f"Error loading history: {exc}"
+
+
+
     """
     Show a setup wizard if this looks like a first run (no library configured).
     Returns True if setup was completed, False if user skipped.
@@ -121,11 +147,24 @@ def _welcome_first_run(cfg: dict) -> bool:
         default=False,
     ).ask()
     if use_history:
-        history_path = questionary.text(
-            "Path to your StreamingHistory*.json file or folder containing them",
-        ).ask()
-        if history_path:
-            cfg["SPOTIFY_HISTORY_PATH"] = history_path
+        while True:
+            history_path = questionary.text(
+                "Path to your StreamingHistory*.json file or folder containing them:",
+            ).ask()
+            if not history_path:
+                break
+            ok, summary = _test_spotify_path(history_path)
+            if ok:
+                print(f"  ✓  Loaded: {summary}")
+                cfg["SPOTIFY_HISTORY_PATH"] = history_path
+                break
+            else:
+                print(f"  ✗  {summary}")
+                retry = questionary.confirm("Try a different path?", default=True).ask()
+                if not retry:
+                    print("  Skipping Spotify history for now.")
+                    print("  You can add it later via Setup → Re-configure Spotify history.")
+                    break
 
     # AI key
     print()
@@ -263,6 +302,54 @@ def edit_config(cfg: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Spotify history setup helper
+# ---------------------------------------------------------------------------
+
+def _handle_spotify_setup(cfg: dict) -> None:
+    """Let the user set (or correct) the Spotify streaming history path with live validation."""
+    current = cfg.get("SPOTIFY_HISTORY_PATH", "")
+    print()
+    if current:
+        ok, summary = _test_spotify_path(current)
+        if ok:
+            print(f"Current path: {current}")
+            print(f"  Status  : ✓  {summary}")
+        else:
+            print(f"Current path: {current}")
+            print(f"  Status  : ✗  {summary}")
+    else:
+        print("Spotify streaming history is not configured.")
+    print()
+    print("Download your data at spotify.com → Account → Privacy settings → Download your data")
+    print("Then unzip and point to the folder containing StreamingHistory*.json files.")
+    print()
+
+    while True:
+        new_path = questionary.text(
+            "New path (or press Enter to keep current / skip):",
+            default=current,
+        ).ask()
+        if new_path is None or new_path.strip() == current:
+            return
+        new_path = new_path.strip()
+        if not new_path:
+            return
+        ok, summary = _test_spotify_path(new_path)
+        if ok:
+            print(f"  ✓  {summary}")
+            cfg["SPOTIFY_HISTORY_PATH"] = new_path
+            from .config import save_config
+            save_config(cfg)
+            print("  Saved.")
+            return
+        else:
+            print(f"  ✗  {summary}")
+            retry = questionary.confirm("Try a different path?", default=True).ask()
+            if not retry:
+                return
+
+
+# ---------------------------------------------------------------------------
 # Paste-in AI workflow helpers
 # ---------------------------------------------------------------------------
 
@@ -280,8 +367,68 @@ def _load_library(cfg: dict):
     return load_itunes_json(str(itunes_json))
 
 
+def _pending_batch_count(library_df, batch_size: int, cache_db: str | None = None) -> int:
+    """Return how many batches of unenriched tracks exist."""
+    import sqlite3
+    if cache_db is None:
+        cache_db = str(Path.home() / ".playlistgen" / "claude_enrichment.sqlite")
+    cached_keys: set = set()
+    if Path(cache_db).exists():
+        try:
+            conn = sqlite3.connect(cache_db)
+            rows = conn.execute("SELECT key FROM claude_enrichment").fetchall()
+            cached_keys = {r[0] for r in rows}
+            conn.close()
+        except Exception:
+            pass
+    import pandas as pd
+    n = 0
+    for _, row in library_df.iterrows():
+        artist = str(row.get("Artist") or "").strip()
+        name = str(row.get("Name") or "").strip()
+        if not artist or not name:
+            continue
+        mood = str(row.get("Mood") or "").strip()
+        if mood and mood not in ("Unknown", ""):
+            continue
+        key = f"{artist} - {name}".lower()
+        if key in cached_keys:
+            continue
+        n += 1
+    return max(1, (n + batch_size - 1) // batch_size)
+
+
+def _handle_export_session(cfg: dict) -> None:
+    """Generate a full-library Claude session .md file (all batches in one upload)."""
+    from .prompt_io import export_enrichment_session
+
+    print()
+    print("Building full-library Claude enrichment session file…")
+
+    try:
+        library_df = _load_library(cfg)
+    except Exception as exc:
+        print(f"Could not load library: {exc}")
+        return
+
+    batch_str = questionary.text(
+        "Tracks per batch (300 is safe for Claude.ai — it handles large output windows well):",
+        default="300",
+    ).ask()
+    try:
+        batch_size = int(batch_str or "300")
+    except ValueError:
+        batch_size = 300
+
+    try:
+        export_enrichment_session(library_df, batch_size=batch_size)
+    except Exception as exc:
+        logging.exception("Session export failed")
+        print(f"Export failed: {exc}")
+
+
 def _handle_paste_enrich(cfg: dict) -> None:
-    """Export an enrichment prompt, guide the user through the AI step, then import."""
+    """Export a single-batch enrichment prompt, guide the user, then import."""
     from .prompt_io import export_enrichment_prompt, import_enrichment_result
 
     print()
@@ -294,13 +441,21 @@ def _handle_paste_enrich(cfg: dict) -> None:
         return
 
     batch_str = questionary.text(
-        "Max tracks per prompt batch (300 works for Claude.ai/ChatGPT Plus; 100 for Gemini free):",
+        "Max tracks per prompt (300 for Claude.ai/ChatGPT Plus; 100 for Gemini free):",
         default="300",
     ).ask()
     try:
         batch_size = int(batch_str or "300")
     except ValueError:
         batch_size = 300
+
+    n_batches = _pending_batch_count(library_df, batch_size)
+    if n_batches > 1:
+        print()
+        print(f"  Your library needs {n_batches} batches to fully enrich.")
+        print("  Tip: use 'Generate Claude session file' to create a single upload")
+        print("  that tells Claude to process all batches automatically.")
+        print()
 
     try:
         out = export_enrichment_prompt(library_df, batch_size=batch_size)
@@ -525,7 +680,11 @@ def run_gui() -> str | None:
             ),
             Separator("── AI Features (no API key needed) ──"),
             Choice(
-                "Generate AI enrichment prompt  (paste into Claude.ai / ChatGPT / Gemini — free)",
+                "Generate Claude session file   (one upload → all batches; artifacts per batch)",
+                value="export_session",
+            ),
+            Choice(
+                "Generate AI enrichment prompt  (single batch — paste into ChatGPT / Gemini / etc.)",
                 value="paste_enrich",
             ),
             Choice(
@@ -542,7 +701,11 @@ def run_gui() -> str | None:
                 value="settings",
             ),
             Choice(
-                "Refresh metadata cache  (re-fetch Last.fm tags for new or updated tracks)",
+                "Re-configure Spotify history     (test & update your streaming history path)",
+                value="spotify_setup",
+            ),
+            Choice(
+                "Refresh metadata cache           (re-fetch Last.fm tags for new or updated tracks)",
                 value="recache",
             ),
             Separator("── Advanced ──"),
@@ -718,6 +881,12 @@ def _handle_action(action: str, cfg: dict) -> None:
         except Exception as exc:
             logging.exception("Recache failed")
             print(f"Recache failed: {exc}")
+
+    elif action == "spotify_setup":
+        _handle_spotify_setup(cfg)
+
+    elif action == "export_session":
+        _handle_export_session(cfg)
 
     elif action == "paste_enrich":
         _handle_paste_enrich(cfg)

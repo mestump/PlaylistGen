@@ -151,8 +151,11 @@ def enrich_dataframe(df: pd.DataFrame, enabled: bool = True) -> pd.DataFrame:
         "Enriching %d tracks with embedded audio tags...", len(rows_to_enrich)
     )
 
+    tag_failures = 0
     for idx, row in rows_to_enrich.iterrows():
         tags = read_audio_tags(str(row["Location"]))
+        if not any(tags.values()):
+            tag_failures += 1
 
         # Only fill genuinely missing values (NaN / None / empty string)
         def _is_missing(val) -> bool:
@@ -182,6 +185,12 @@ def enrich_dataframe(df: pd.DataFrame, enabled: bool = True) -> pd.DataFrame:
 
     valid_years = df["Year"].notna().sum()
     valid_bpm = df["BPM"].notna().sum()
+    if tag_failures:
+        logging.warning(
+            "mutagen tag extraction: %d/%d files returned no tags "
+            "(unreadable or missing — Year/BPM will be absent for those tracks).",
+            tag_failures, len(rows_to_enrich),
+        )
     logging.info(
         "Audio tag enrichment complete. Year: %d tracks, BPM: %d tracks.",
         valid_years,

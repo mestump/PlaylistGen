@@ -836,6 +836,183 @@ def import_curation_result(
 
 
 # ---------------------------------------------------------------------------
+# Session file export (all batches in one upload for Claude.ai)
+# ---------------------------------------------------------------------------
+
+_SESSION_HEADER = """\
+{sep}
+PLAYLISTGEN  ·  FULL LIBRARY ENRICHMENT SESSION  ·  {date}
+Tracks needing enrichment: {total}  ·  Batch size: {batch_size}  ·  Batches: {n_batches}
+{sep}
+
+## INSTRUCTIONS FOR CLAUDE
+
+You are helping classify a personal music library for an offline playlist generator.
+This file contains {n_batches} batch{plural} of tracks needing mood / energy / valence
+classification. **Process each batch in order, one at a time.**
+
+For each batch:
+  1. Read the track list under the batch header.
+  2. Classify every track exactly as the batch prompt instructs.
+  3. Output the JSON as a **file artifact** named exactly as shown in the batch
+     header (e.g. `batch_1_enrichment.json`).
+  4. After creating the artifact, confirm with a brief note like
+     "Batch 1 complete — 300 tracks classified" then continue to the next batch.
+
+**Important:**
+  • Create one separate file artifact per batch — do NOT combine them.
+  • Keep each artifact as raw JSON only (the array itself, no markdown fences).
+  • Do not hold previous batches' results in your response — saving to a file
+    means I can import each batch independently without you retaining the data.
+
+After you finish all {n_batches} batch{plural}, I will import each file with:
+{import_commands}
+
+{sep}
+"""
+
+_BATCH_SECTION = """\
+
+{sep}
+## BATCH {batch_num} OF {n_batches}  ·  Tracks {start}–{end} of {total}
+**Create a file artifact named:** `{filename}`
+
+{prompt}
+
+"""
+
+
+def export_enrichment_session(
+    df: "pd.DataFrame",
+    out_path: Optional[str] = None,
+    batch_size: int = 300,
+    cache_db: Optional[str] = None,
+) -> Path:
+    """
+    Generate a single Markdown file containing ALL pending enrichment batches.
+
+    Designed to be uploaded to Claude.ai in one go.  Claude processes each
+    batch sequentially and creates a downloadable file artifact per batch.
+    The user imports each artifact with ``import-ai-result``.
+
+    Args:
+        df:         Library DataFrame (Artist, Name, Genre, BPM, Year, Mood).
+        out_path:   Output file path.  Defaults to
+                    ./playlistgen_enrichment_session.md
+        batch_size: Tracks per batch (default 300 — comfortable for Claude.ai).
+        cache_db:   Enrichment SQLite cache path (to skip already-enriched tracks).
+
+    Returns:
+        Path to the generated .md file.
+    """
+    if cache_db is None:
+        cache_db = str(Path.home() / ".playlistgen" / "claude_enrichment.sqlite")
+
+    # Same "needs enrichment" logic as export_enrichment_prompt
+    needs_enrich = []
+    cached_keys: set = set()
+    if Path(cache_db).exists():
+        try:
+            import sqlite3
+            conn = sqlite3.connect(cache_db)
+            rows = conn.execute("SELECT key FROM claude_enrichment").fetchall()
+            cached_keys = {r[0] for r in rows}
+            conn.close()
+        except Exception as exc:
+            logger.debug("Could not read enrichment cache: %s", exc)
+
+    for idx, row in df.iterrows():
+        artist = str(row.get("Artist") or "").strip()
+        name = str(row.get("Name") or "").strip()
+        if not artist or not name:
+            continue
+        mood = str(row.get("Mood") or "").strip()
+        if mood and mood not in ("Unknown", ""):
+            continue
+        key = f"{artist} - {name}".lower()
+        if key in cached_keys:
+            continue
+        needs_enrich.append((idx, row))
+
+    total = len(needs_enrich)
+    if total == 0:
+        print("\nAll tracks already have mood data — nothing to export.")
+        return Path(out_path or "playlistgen_enrichment_session.md")
+
+    n_batches = max(1, (total + batch_size - 1) // batch_size)
+
+    # Build import command list for the header
+    import_commands = "\n".join(
+        f"    playlistgen import-ai-result batch_{i + 1}_enrichment.json"
+        for i in range(n_batches)
+    )
+
+    header = _SESSION_HEADER.format(
+        sep=_SEP,
+        date=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+        total=total,
+        batch_size=batch_size,
+        n_batches=n_batches,
+        plural="es" if n_batches != 1 else "",
+        import_commands=import_commands,
+    )
+
+    sections = []
+    for batch_num in range(1, n_batches + 1):
+        start_i = (batch_num - 1) * batch_size
+        end_i = min(start_i + batch_size, total)
+        batch = needs_enrich[start_i:end_i]
+        n = len(batch)
+
+        track_lines = [_format_enrich_line(i + 1, row) for i, (_, row) in enumerate(batch)]
+        track_list_str = "\n".join(track_lines)
+        prompt_text = _ENRICH_PROMPT.format(n=n, track_list=track_list_str)
+
+        sections.append(
+            _BATCH_SECTION.format(
+                sep=_SEP,
+                batch_num=batch_num,
+                n_batches=n_batches,
+                start=start_i + 1,
+                end=end_i,
+                total=total,
+                filename=f"batch_{batch_num}_enrichment.json",
+                prompt=prompt_text,
+            )
+        )
+
+    if out_path is None:
+        out_path = "playlistgen_enrichment_session.md"
+    out = Path(out_path)
+    out.write_text(header + "".join(sections), encoding="utf-8")
+
+    print(f"""
+{_SEP}
+  PLAYLISTGEN — Claude Enrichment Session Generated
+{_SEP}
+
+  File   : {out.resolve()}
+  Tracks : {total} across {n_batches} batch{"es" if n_batches != 1 else ""}
+  Output : batch_1_enrichment.json … batch_{n_batches}_enrichment.json
+
+  HOW TO USE
+  ──────────
+  1. Go to claude.ai → start a new conversation
+  2. Upload this .md file (drag & drop or paperclip icon)
+  3. Send: "Please process this enrichment session"
+  4. Claude will work through each batch and save a JSON artifact per batch
+  5. Download each artifact (batch_N_enrichment.json) as Claude creates them
+  6. Import each file:
+{import_commands}
+
+  Each import is independent — you can import batch 2 before batch 3 is done.
+  Re-running import on an already-imported file is safe (idempotent).
+{_SEP}
+""")
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Auto-dispatch: import either mode from a single file
 # ---------------------------------------------------------------------------
 
