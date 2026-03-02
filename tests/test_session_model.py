@@ -54,7 +54,7 @@ def test_load_extended_format():
         entries = [
             {
                 "ts": "2024-01-01T10:00:00Z",
-                "master_metadata_track_artist_name": "Radiohead",
+                "master_metadata_album_artist_name": "Radiohead",
                 "master_metadata_track_name": "Creep",
                 "ms_played": 220000,
             }

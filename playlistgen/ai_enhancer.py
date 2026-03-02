@@ -444,7 +444,10 @@ def batch_enrich_metadata(
         for item in results:
             if not isinstance(item, dict):
                 continue
-            idx_1based = item.get("idx", 0)
+            try:
+                idx_1based = int(item.get("idx", 0))
+            except (TypeError, ValueError):
+                continue
             if not (1 <= idx_1based <= len(batch)):
                 continue
             orig_idx, key, _ = batch[idx_1based - 1]

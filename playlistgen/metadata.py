@@ -165,7 +165,7 @@ def enrich_dataframe(df: pd.DataFrame, enabled: bool = True) -> pd.DataFrame:
                 import math
                 return math.isnan(float(val))
             except (TypeError, ValueError):
-                return str(val).strip() in ("", "None", "nan")
+                return str(val).strip().lower() in ("", "none", "nan")
 
         if tags["year"] and _is_missing(df.at[idx, "Year"]):
             df.at[idx, "Year"] = tags["year"]

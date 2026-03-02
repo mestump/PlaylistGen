@@ -208,8 +208,11 @@ def main():
             or str(Path.home() / ".playlistgen" / "lastfm.sqlite")
         )
         if Path(db_path).exists():
-            Path(db_path).unlink()
-            logging.info("Removed tag cache at %s — will re-fetch on next run.", db_path)
+            try:
+                Path(db_path).unlink()
+                logging.info("Removed tag cache at %s — will re-fetch on next run.", db_path)
+            except OSError as exc:
+                logging.warning("Could not remove tag cache at %s: %s", db_path, exc)
 
         ensure_tag_cache(cfg, itunes_json)
 
