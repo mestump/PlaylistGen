@@ -105,7 +105,8 @@ def run_pipeline(
     # ------------------------------------------------------------------
     if library_dir:
         logging.info("Scanning local library: %s", library_dir)
-        df = build_library_from_dir(library_dir)
+        mutagen_enabled = bool(cfg.get("MUTAGEN_ENABLED", True))
+        df = build_library_from_dir(library_dir, mutagen_enabled=mutagen_enabled)
         if df.empty:
             logging.error("No audio files found in %s — aborting.", library_dir)
             return []
@@ -137,7 +138,7 @@ def run_pipeline(
                 ).expanduser()
             )
             workers = int(cfg.get("AUDIO_ANALYSIS_WORKERS", 4))
-            df = analyze_library(df, db_path=audio_cache, enabled=True, workers=workers)
+            df = analyze_library(df, db_path=audio_cache, enabled=librosa_enabled, workers=workers)
         except Exception as exc:
             logging.warning("Audio analysis stage failed: %s — continuing.", exc)
 
