@@ -16,8 +16,10 @@ Each run it:
    with **mutagen** — no internet required for this step.
 2. Analyses audio features (tempo, energy, brightness) locally with
    **libROSA** — again, fully offline.
-3. Optionally enriches mood/energy metadata by asking **Claude** to classify
-   batches of 100 tracks at a time (~$0.001 / track, cached indefinitely).
+3. Optionally enriches mood/energy metadata via **Claude** — either through
+   the API (~$0.001 / track, cached indefinitely) or the **free paste-in
+   workflow** where you copy a generated prompt into Claude.ai / ChatGPT /
+   Gemini and paste the JSON response back. No API key required.
 4. Builds a **session model** from your Spotify streaming-history JSON export,
    learning which tracks you play together and which you've played recently.
 5. Scores every track by combining plays, skips, recency, and co-occurrence.
@@ -110,6 +112,14 @@ The menu is divided into four sections:
 | **Claude: Smart playlist curation** | Sends your top-scored tracks to Claude (Sonnet) which groups them into 5–10 themed playlists with descriptive names |
 | **Claude: Enrich library metadata** | Sends tracks in batches of 100 to Claude (Haiku) which classifies each track's Mood, Energy, and Valence. Results are cached in SQLite so only new tracks are re-analysed |
 
+### AI Features *(no API key needed)*
+
+| Option | What it does |
+|--------|-------------|
+| **Generate AI enrichment prompt** | Writes a self-contained prompt file you paste into Claude.ai, ChatGPT, Gemini, etc. The AI's JSON response is pasted back into the file and imported — results go into the same cache as the API path |
+| **Generate AI curation prompt** | Same paste-in workflow for full playlist curation — the AI groups your tracks into themed playlists, you paste the response back, and the M3Us are written immediately |
+| **Import AI response from file** | Import a previously generated prompt file that already has the AI response pasted in — useful if you want to do the AI step separately from the import |
+
 ### Setup & Maintenance
 
 | Option | What it does |
@@ -159,6 +169,17 @@ python -m playlistgen recache-moods
 
 # Discover music similar to a genre query (requires Spotify credentials)
 python -m playlistgen discover --genre "Indie Rock" --limit 5
+
+# Generate a paste-in AI enrichment prompt (no API key needed)
+python -m playlistgen export-ai-prompt --mode enrich
+python -m playlistgen export-ai-prompt --mode enrich --batch-size 500   # for Claude.ai
+
+# Generate a paste-in AI curation prompt
+python -m playlistgen export-ai-prompt --mode curate --n-playlists 8
+
+# Import the AI's JSON response (auto-detects enrich vs curate)
+python -m playlistgen import-ai-result playlistgen_enrich_prompt.txt
+python -m playlistgen import-ai-result response.json   # plain JSON file also works
 ```
 
 ### Examples
@@ -354,6 +375,61 @@ entirely when enabled.
 Enable via config (`AI_CURATE: true`) or CLI (`--ai-curate`) or the
 interactive menu.
 
+### AI features without an API key (paste-in workflow)
+
+If you don't have an Anthropic API key — or prefer to use your existing
+Claude.ai, ChatGPT Plus, or Gemini Advanced subscription — PlaylistGen can
+generate a self-contained prompt file you paste into any AI and import the
+response back.
+
+**Enrichment workflow:**
+
+```bash
+# 1. Generate the prompt
+python -m playlistgen export-ai-prompt --mode enrich
+
+# → Writes playlistgen_enrich_prompt.txt with clear instructions inside.
+
+# 2. Open the file.  Copy everything between PROMPT START and PROMPT END.
+#    Paste into Claude.ai / ChatGPT / Gemini.  Copy the JSON response.
+#    Paste it into the RESPONSE section at the bottom of the file.
+
+# 3. Import — results go into the same SQLite cache as the API path.
+python -m playlistgen import-ai-result playlistgen_enrich_prompt.txt
+
+# 4. Run normally — enriched data is picked up automatically.
+python -m playlistgen
+```
+
+**Curation workflow:**
+
+```bash
+python -m playlistgen export-ai-prompt --mode curate --n-playlists 6
+# → paste into AI, paste response back into file
+python -m playlistgen import-ai-result playlistgen_curate_prompt.txt
+# → M3U playlists written to ./mixes/ immediately
+```
+
+**Recommended batch sizes by AI:**
+
+| AI | Output token limit | Enrich tracks per batch | Notes |
+|----|-------------------|------------------------|-------|
+| Claude.ai (any plan) | 32 K | up to **500** | Best choice — large output window |
+| ChatGPT Plus (GPT-4o) | 16 K | up to **250** | Use `--batch-size 250` |
+| Gemini Advanced | 8 K | up to **100** | Use `--batch-size 100` |
+
+For large libraries, generate multiple batches:
+
+```bash
+python -m playlistgen export-ai-prompt --batch 1 --batch-size 300
+python -m playlistgen export-ai-prompt --batch 2 --batch-size 300
+# process each file, then import both
+python -m playlistgen import-ai-result playlistgen_enrich_prompt_1.txt
+python -m playlistgen import-ai-result playlistgen_enrich_prompt_2.txt
+```
+
+The import is idempotent — re-importing an already-cached track is a no-op.
+
 ---
 
 ## Session model in depth
@@ -423,7 +499,8 @@ PlaylistGen/
 │   ├── itunes.py            iTunes XML → DataFrame
 │   ├── audio_analysis.py    libROSA feature extraction + SQLite cache
 │   ├── session_model.py     Spotify history → co-occurrence + recency
-│   ├── ai_enhancer.py       Claude batch enrichment + curation
+│   ├── ai_enhancer.py       Claude batch enrichment + curation (API path)
+│   ├── prompt_io.py         Paste-in AI workflow — prompt export + response import
 │   ├── clustering.py        KMeans / mood / TF-IDF clustering
 │   ├── scoring.py           composite track scorer
 │   ├── playlist_builder.py  M3U writer
@@ -450,9 +527,15 @@ being scanned.
 runs are instant (cached). Increase `AUDIO_ANALYSIS_WORKERS` if you have more
 CPU cores available.
 
+**Don't have an Anthropic API key?** — Use the paste-in workflow instead.
+Run `python -m playlistgen export-ai-prompt --mode enrich`, paste the prompt
+into Claude.ai (free tier works), and import the response. No key or payment
+needed beyond whatever AI you already use.
+
 **Claude enrichment is expensive** — Use Claude Haiku (`claude-haiku-4-5-20251001`)
 which is the default for enrichment. Sonnet is only used for full curation.
 Costs are roughly $0.001 per track for enrichment (one-time, cached).
+Alternatively, use the free paste-in workflow described above.
 
 **Last.fm rate limits** — Increase `LASTFM_RATE_LIMIT_MS` (default 200 ms).
 Last.fm allows ~5 requests/second on a free key.
