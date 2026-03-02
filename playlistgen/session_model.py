@@ -37,7 +37,7 @@ def load_streaming_history(
 
     Supports both export formats Spotify has used over the years:
       - Classic:  [{"endTime": "...", "artistName": "...", "trackName": "...", "msPlayed": N}]
-      - Extended: [{"ts": "...", "master_metadata_track_artist_name": "...", "ms_played": N}]
+      - Extended: [{"ts": "...", "master_metadata_album_artist_name": "...", "ms_played": N}]
 
     If json_paths is a directory, all *.json files within it are loaded
     automatically (non-streaming files are skipped based on content).
@@ -81,7 +81,7 @@ def load_streaming_history(
                                 entry.get("ts"), utc=True, errors="coerce"
                             ),
                             "artist": entry.get(
-                                "master_metadata_track_artist_name"
+                                "master_metadata_album_artist_name"
                             )
                             or "",
                             "track": entry.get("master_metadata_track_name")
