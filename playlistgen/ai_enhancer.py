@@ -410,7 +410,7 @@ def batch_enrich_metadata(
             try:
                 message = client.messages.create(
                     model=model,
-                    max_tokens=2048,
+                    max_tokens=8192,
                     system=_ENRICH_SYSTEM,
                     messages=[{"role": "user", "content": user_msg}],
                 )
