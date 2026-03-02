@@ -17,15 +17,34 @@ from .seed_playlist import build_seed_playlist
 # Status / helpers
 # ---------------------------------------------------------------------------
 
+def _enrichment_cache_count() -> int:
+    """Return the number of tracks already enriched in the SQLite cache."""
+    cache_db = Path.home() / ".playlistgen" / "claude_enrichment.sqlite"
+    if not cache_db.exists():
+        return 0
+    try:
+        import sqlite3
+        conn = sqlite3.connect(str(cache_db))
+        n = conn.execute("SELECT COUNT(*) FROM claude_enrichment").fetchone()[0]
+        conn.close()
+        return n
+    except Exception:
+        return 0
+
+
 def _status_line(cfg: dict) -> str:
     """Return a one-line summary of what features are currently active."""
     parts = []
 
     ai_key = cfg.get("ANTHROPIC_API_KEY")
     if ai_key:
-        parts.append("AI: enabled")
+        parts.append("AI: enabled (API)")
     else:
-        parts.append("AI: not configured")
+        cached = _enrichment_cache_count()
+        if cached:
+            parts.append(f"AI: {cached} tracks enriched (paste-in cache)")
+        else:
+            parts.append("AI: no API key (paste-in available)")
 
     history = cfg.get("SPOTIFY_HISTORY_PATH")
     if history and Path(str(history)).exists():
@@ -119,6 +138,11 @@ def _welcome_first_run(cfg: dict) -> bool:
         if ai_key:
             cfg["ANTHROPIC_API_KEY"] = ai_key
             cfg["AI_ENHANCE"] = True
+    else:
+        print()
+        print("No problem — you can still use AI features without an API key.")
+        print("Use  'Generate AI prompt (paste-in)'  from the main menu to get a")
+        print("prompt you paste into Claude.ai, ChatGPT, or Gemini for free.")
 
     save_config(cfg)
     print()
@@ -239,6 +263,218 @@ def edit_config(cfg: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Paste-in AI workflow helpers
+# ---------------------------------------------------------------------------
+
+def _load_library(cfg: dict):
+    """Load the library DataFrame from iTunes JSON or directory scan."""
+    from .pipeline import ensure_itunes_json
+    from .itunes import load_itunes_json
+
+    lib_dir = cfg.get("LIBRARY_DIR")
+    if lib_dir and Path(lib_dir).exists():
+        from .itunes import build_library_from_dir
+        return build_library_from_dir(lib_dir)
+
+    itunes_json = ensure_itunes_json(cfg)
+    return load_itunes_json(str(itunes_json))
+
+
+def _handle_paste_enrich(cfg: dict) -> None:
+    """Export an enrichment prompt, guide the user through the AI step, then import."""
+    from .prompt_io import export_enrichment_prompt, import_enrichment_result
+
+    print()
+    print("Generating AI enrichment prompt…")
+
+    try:
+        library_df = _load_library(cfg)
+    except Exception as exc:
+        print(f"Could not load library: {exc}")
+        return
+
+    batch_str = questionary.text(
+        "Max tracks per prompt batch (300 works for Claude.ai/ChatGPT Plus; 100 for Gemini free):",
+        default="300",
+    ).ask()
+    try:
+        batch_size = int(batch_str or "300")
+    except ValueError:
+        batch_size = 300
+
+    try:
+        out = export_enrichment_prompt(library_df, batch_size=batch_size)
+    except Exception as exc:
+        print(f"Export failed: {exc}")
+        return
+
+    print()
+    print("─" * 60)
+    print("  STEPS")
+    print("─" * 60)
+    print(f"  1. Open: {out.resolve()}")
+    print("  2. Copy the section between PROMPT START and PROMPT END")
+    print("  3. Paste into Claude.ai, ChatGPT, Gemini, or any AI")
+    print("  4. Copy the AI's entire JSON response")
+    print("  5. Paste it into the RESPONSE section at the bottom of the file")
+    print("─" * 60)
+    print()
+
+    ready = questionary.confirm(
+        "Ready to import the AI response from the file?",
+        default=False,
+    ).ask()
+    if not ready:
+        print()
+        print(f"No problem — come back and run 'Import AI response from file'")
+        print(f"when you're ready, or run:")
+        print(f"  playlistgen import-ai-result \"{out.name}\"")
+        return
+
+    try:
+        import_enrichment_result(str(out), library_df)
+    except ValueError as exc:
+        print()
+        print(f"Import failed: {exc}")
+        print("Make sure you pasted the AI's JSON into the RESPONSE section of the file.")
+    except Exception as exc:
+        logging.exception("Enrichment import failed")
+        print(f"Import failed: {exc}")
+
+
+def _handle_paste_curate(cfg: dict) -> None:
+    """Export a curation prompt, guide the user through the AI step, then import."""
+    from .tag_mood_service import load_tag_mood_db
+    from .scoring import score_tracks
+    from .prompt_io import export_curation_prompt, import_curation_result
+    from .playlist_builder import save_m3u
+
+    print()
+    print("Scoring your library for curation prompt…")
+
+    try:
+        library_df = _load_library(cfg)
+    except Exception as exc:
+        print(f"Could not load library: {exc}")
+        return
+
+    tag_db = load_tag_mood_db()
+    scored_df = score_tracks(library_df, tag_mood_db=tag_db)
+
+    n_str = questionary.text(
+        "How many playlists should the AI create?",
+        default="6",
+    ).ask()
+    try:
+        n_playlists = int(n_str or "6")
+    except ValueError:
+        n_playlists = 6
+
+    try:
+        out = export_curation_prompt(scored_df, n_playlists=n_playlists)
+    except Exception as exc:
+        print(f"Export failed: {exc}")
+        return
+
+    print()
+    print("─" * 60)
+    print("  STEPS")
+    print("─" * 60)
+    print(f"  1. Open: {out.resolve()}")
+    print("  2. Copy the section between PROMPT START and PROMPT END")
+    print("  3. Paste into Claude.ai, ChatGPT, Gemini, or any AI")
+    print("  4. Copy the AI's entire JSON response")
+    print("  5. Paste it into the RESPONSE section at the bottom of the file")
+    print("─" * 60)
+    print()
+
+    ready = questionary.confirm(
+        "Ready to import the AI response and write playlists?",
+        default=False,
+    ).ask()
+    if not ready:
+        print()
+        print(f"No problem — come back and run 'Import AI response from file'")
+        print(f"when you're ready, or run:")
+        print(f"  playlistgen import-ai-result \"{out.name}\"")
+        return
+
+    try:
+        playlists = import_curation_result(str(out), scored_df)
+    except ValueError as exc:
+        print()
+        print(f"Import failed: {exc}")
+        print("Make sure you pasted the AI's JSON into the RESPONSE section of the file.")
+        return
+    except Exception as exc:
+        logging.exception("Curation import failed")
+        print(f"Import failed: {exc}")
+        return
+
+    out_dir = cfg.get("OUTPUT_DIR", "./mixes")
+    for label, playlist_df in playlists:
+        save_m3u(playlist_df, label, out_dir=out_dir)
+    print(f"  {len(playlists)} playlists written to {out_dir}/")
+
+
+def _handle_import_ai(cfg: dict) -> None:
+    """Import a previously generated prompt file with AI response pasted in."""
+    from .prompt_io import _detect_mode, import_enrichment_result, import_curation_result
+    from .tag_mood_service import load_tag_mood_db
+    from .scoring import score_tracks
+    from .playlist_builder import save_m3u
+
+    print()
+    file_path = questionary.text(
+        "Path to the prompt .txt file (or a plain .json response file):",
+        placeholder="playlistgen_enrich_prompt.txt",
+    ).ask()
+    if not file_path:
+        return
+
+    file_path = file_path.strip()
+    if not Path(file_path).exists():
+        print(f"File not found: {file_path}")
+        return
+
+    raw = Path(file_path).read_text(encoding="utf-8")
+    mode = _detect_mode(raw)
+    print(f"  Detected mode: {mode}")
+
+    try:
+        library_df = _load_library(cfg)
+    except Exception as exc:
+        print(f"Could not load library: {exc}")
+        return
+
+    if mode == "enrich":
+        try:
+            import_enrichment_result(file_path, library_df)
+        except ValueError as exc:
+            print(f"Import failed: {exc}")
+        except Exception as exc:
+            logging.exception("Import failed")
+            print(f"Import failed: {exc}")
+    else:
+        tag_db = load_tag_mood_db()
+        scored_df = score_tracks(library_df, tag_mood_db=tag_db)
+        try:
+            playlists = import_curation_result(file_path, scored_df)
+        except ValueError as exc:
+            print(f"Import failed: {exc}")
+            return
+        except Exception as exc:
+            logging.exception("Import failed")
+            print(f"Import failed: {exc}")
+            return
+
+        out_dir = cfg.get("OUTPUT_DIR", "./mixes")
+        for label, playlist_df in playlists:
+            save_m3u(playlist_df, label, out_dir=out_dir)
+        print(f"  {len(playlists)} playlists written to {out_dir}/")
+
+
+# ---------------------------------------------------------------------------
 # Main GUI loop
 # ---------------------------------------------------------------------------
 
@@ -278,7 +514,7 @@ def run_gui() -> str | None:
                 "Filter by genre  (e.g. Rock, Jazz, Hip-Hop…)",
                 value="genre",
             ),
-            Separator("── AI Features ──"),
+            Separator("── AI Features (API key) ──"),
             Choice(
                 "Claude: Smart playlist curation  (Claude groups tracks into themed playlists)",
                 value="ai_curate",
@@ -286,6 +522,19 @@ def run_gui() -> str | None:
             Choice(
                 "Claude: Enrich library metadata  (Claude adds mood/energy tags to your whole library)",
                 value="ai_enrich",
+            ),
+            Separator("── AI Features (no API key needed) ──"),
+            Choice(
+                "Generate AI enrichment prompt  (paste into Claude.ai / ChatGPT / Gemini — free)",
+                value="paste_enrich",
+            ),
+            Choice(
+                "Generate AI curation prompt    (paste into Claude.ai / ChatGPT / Gemini — free)",
+                value="paste_curate",
+            ),
+            Choice(
+                "Import AI response from file   (after pasting the AI's JSON response back)",
+                value="import_ai",
             ),
             Separator("── Setup & Maintenance ──"),
             Choice(
@@ -396,8 +645,9 @@ def _handle_action(action: str, cfg: dict) -> None:
     elif action == "ai_curate":
         if not cfg.get("ANTHROPIC_API_KEY"):
             print()
-            print("An Anthropic API key is required for AI features.")
-            print("Go to: Settings → Configure API keys & data paths")
+            print("No Anthropic API key configured.")
+            print("Use 'Generate AI curation prompt' below to curate playlists")
+            print("by pasting a prompt into Claude.ai, ChatGPT, or Gemini — no key needed.")
             return
         print()
         print("Claude is curating your playlists…")
@@ -409,8 +659,9 @@ def _handle_action(action: str, cfg: dict) -> None:
     elif action == "ai_enrich":
         if not cfg.get("ANTHROPIC_API_KEY"):
             print()
-            print("An Anthropic API key is required for AI features.")
-            print("Go to: Settings → Configure API keys & data paths")
+            print("No Anthropic API key configured.")
+            print("Use 'Generate AI enrichment prompt' below to enrich your library")
+            print("by pasting a prompt into Claude.ai, ChatGPT, or Gemini — no key needed.")
             return
         print()
         print("Claude is tagging your library with mood and energy data…")
@@ -467,6 +718,15 @@ def _handle_action(action: str, cfg: dict) -> None:
         except Exception as exc:
             logging.exception("Recache failed")
             print(f"Recache failed: {exc}")
+
+    elif action == "paste_enrich":
+        _handle_paste_enrich(cfg)
+
+    elif action == "paste_curate":
+        _handle_paste_curate(cfg)
+
+    elif action == "import_ai":
+        _handle_import_ai(cfg)
 
     elif action == "config":
         edit_config(cfg)
