@@ -111,7 +111,11 @@ HOW TO USE
   1. Copy everything between ── PROMPT START ── and ── PROMPT END ── below.
 
   2. Paste it into Claude.ai, ChatGPT, Gemini, or any AI assistant.
-     (Any model with a 16 K+ output token limit works for up to ~200 tracks.)
+     Recommended output token capacity by AI:
+       Claude.ai (free/Pro/Max) — 32K out  → up to 500 tracks
+       ChatGPT Plus (GPT-4o)   — 16K out  → up to 250 tracks
+       Gemini Advanced          — 8K out   → up to 100 tracks
+     Override with: playlistgen export-ai-prompt --batch-size N
 
   3. Copy the AI's entire JSON response.
 
@@ -202,7 +206,7 @@ def _format_curate_line(i: int, row: pd.Series) -> str:
 def export_enrichment_prompt(
     df: pd.DataFrame,
     out_path: Optional[str] = None,
-    batch_size: int = 150,
+    batch_size: int = 300,
     batch_index: int = 0,
     cache_db: Optional[str] = None,
 ) -> Path:
@@ -339,7 +343,7 @@ def export_curation_prompt(
     scored_df: pd.DataFrame,
     n_playlists: int = 6,
     out_path: Optional[str] = None,
-    max_tracks: int = 300,
+    max_tracks: int = 500,
 ) -> Path:
     """
     Generate a self-contained AI playlist curation prompt.

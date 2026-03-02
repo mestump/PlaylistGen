@@ -119,9 +119,9 @@ def main():
     export_parser.add_argument(
         "--batch-size",
         type=int,
-        default=150,
+        default=300,
         metavar="N",
-        help="Max tracks per prompt batch (default: 150)",
+        help="Max tracks per prompt batch (default: 300; Claude.ai handles 500+)",
     )
     export_parser.add_argument(
         "--n-playlists",
@@ -132,8 +132,8 @@ def main():
     export_parser.add_argument(
         "--max-tracks",
         type=int,
-        default=300,
-        help="Max tracks to include in curate mode prompt (default: 300)",
+        default=500,
+        help="Max tracks to include in curate mode prompt (default: 500)",
     )
     export_parser.add_argument(
         "--library-dir",
