@@ -87,7 +87,7 @@ def _test_spotify_path(path_str: str) -> tuple[bool, str]:
         return False, f"Error loading history: {exc}"
 
 
-
+def _welcome_first_run(cfg: dict) -> bool:
     """
     Show a setup wizard if this looks like a first run (no library configured).
     Returns True if setup was completed, False if user skipped.

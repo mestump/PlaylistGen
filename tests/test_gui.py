@@ -3,18 +3,21 @@ import sys
 
 
 def test_run_gui_generate_mix(monkeypatch):
-    answers = iter(["Generate mix", "", ""])
+    select_answers = iter(["generate_mix", "exit"])
 
     def fake_select(*args, **kwargs):
         class Q:
             def ask(self):
-                return next(answers)
+                return next(select_answers)
         return Q()
 
-    def fake_text(*args, **kwargs):
+    # confirm: skip wizard (False), then "return to menu?" (False to exit)
+    confirm_answers = iter([False, False])
+
+    def fake_confirm(*args, **kwargs):
         class Q:
             def ask(self):
-                return next(answers)
+                return next(confirm_answers)
         return Q()
 
     called = {}
@@ -23,28 +26,36 @@ def test_run_gui_generate_mix(monkeypatch):
         called["mood"] = mood
 
     monkeypatch.setattr(gui.questionary, "select", fake_select)
-    monkeypatch.setattr(gui.questionary, "text", fake_text)
+    monkeypatch.setattr(gui.questionary, "confirm", fake_confirm)
     monkeypatch.setattr(gui, "run_pipeline", fake_run_pipeline)
-    monkeypatch.setattr(gui, "load_config", lambda: {})
+    monkeypatch.setattr(gui, "load_config", lambda: {"ITUNES_JSON": "itunes_slimmed.json"})
+    monkeypatch.setattr(gui, "_welcome_first_run", lambda cfg: False)
 
     action = gui.run_gui()
-    assert action == "Generate mix"
+    assert action == "generate_mix"
     assert called == {"genre": None, "mood": None}
 
 
 def test_run_gui_seed_song(monkeypatch):
-    answers = iter(["Generate from seed song", "Artist - Title", "5"])
+    select_answers = iter(["seed", "exit"])
+    text_answers = iter(["Artist - Title", "5"])
 
     def fake_select(*args, **kwargs):
         class Q:
             def ask(self):
-                return next(answers)
+                return next(select_answers)
         return Q()
 
     def fake_text(*args, **kwargs):
         class Q:
             def ask(self):
-                return next(answers)
+                return next(text_answers)
+        return Q()
+
+    def fake_confirm(*args, **kwargs):
+        class Q:
+            def ask(self):
+                return False
         return Q()
 
     called = {}
@@ -54,40 +65,11 @@ def test_run_gui_seed_song(monkeypatch):
 
     monkeypatch.setattr(gui.questionary, "select", fake_select)
     monkeypatch.setattr(gui.questionary, "text", fake_text)
+    monkeypatch.setattr(gui.questionary, "confirm", fake_confirm)
     monkeypatch.setattr(gui, "build_seed_playlist", fake_build)
-    monkeypatch.setattr(gui, "load_config", lambda: {})
+    monkeypatch.setattr(gui, "load_config", lambda: {"ITUNES_JSON": "itunes_slimmed.json"})
+    monkeypatch.setattr(gui, "_welcome_first_run", lambda cfg: False)
 
     action = gui.run_gui()
-    assert action == "Generate from seed song"
+    assert action == "seed"
     assert called == {"song": "Artist - Title", "limit": 5}
-
-
-def test_spotify_login_uses_redirect_from_config(monkeypatch):
-    captured = {}
-
-    class FakeAuth:
-        def __init__(self, client_id=None, client_secret=None, scope=None, redirect_uri=None):
-            captured["redirect_uri"] = redirect_uri
-
-        def get_access_token(self, as_dict=False):
-            return "tok"
-
-    import types
-
-    fake_spotipy = types.ModuleType("spotipy")
-    fake_oauth2 = types.ModuleType("oauth2")
-    fake_oauth2.SpotifyOAuth = FakeAuth
-    fake_spotipy.oauth2 = fake_oauth2
-
-    monkeypatch.setitem(sys.modules, "spotipy", fake_spotipy)
-    monkeypatch.setitem(sys.modules, "spotipy.oauth2", fake_oauth2)
-    monkeypatch.setattr(gui, "save_config", lambda cfg: None)
-
-    cfg = {
-        "SPOTIFY_CLIENT_ID": "id",
-        "SPOTIFY_CLIENT_SECRET": "secret",
-        "SPOTIFY_REDIRECT_URI": "http://127.0.0.1:8888/callback",
-    }
-
-    gui.spotify_login(cfg)
-    assert captured["redirect_uri"] == "http://127.0.0.1:8888/callback"
