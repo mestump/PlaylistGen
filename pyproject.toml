@@ -1,24 +1,33 @@
-[tool.poetry]
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
 name = "playlistgen"
 version = "0.1.0"
 description = "Generate playlists based on Spotify history and iTunes library"
-authors = ["Your Name <you@example.com>"]
+authors = [{name = "Your Name", email = "you@example.com"}]
+requires-python = ">=3.8"
+dependencies = [
+    "pandas>=1.0",
+    "PyYAML>=5.1",
+    "requests>=2.0",
+    "tqdm>=4.0",
+    "scikit-learn>=0.24",
+    "mutagen>=1.45",
+    "anthropic>=0.25.0",
+]
 
-[tool.poetry.dependencies]
-python = ">=3.8,<4.0"
-pandas = "^1.0"
-PyYAML = "^5.1"
-requests = "^2.0"
-tqdm = "^4.0"
-scikit-learn = "^0.24"
-mutagen = "^1.45"
-anthropic = "^0.25.0"
-spotipy = {version = "^2.23", optional = true}
-questionary = {version = "^1.10", optional = true}
+[project.optional-dependencies]
+spotify = ["spotipy>=2.23"]
+tui = ["questionary>=1.10"]
 
-[tool.poetry.extras]
-spotify = ["spotipy"]
-tui = ["questionary"]
+[project.scripts]
+playlistgen = "playlistgen.cli:main"
 
-[tool.poetry.dev-dependencies]
-pytest = "^6.0"
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["playlistgen*"]
