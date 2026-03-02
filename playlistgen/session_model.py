@@ -33,14 +33,14 @@ def load_streaming_history(
     json_paths: Union[str, List[str], Path],
 ) -> pd.DataFrame:
     """
-    Load one or more Spotify StreamingHistory*.json files.
+    Load one or more Spotify streaming-history JSON files.
 
     Supports both export formats Spotify has used over the years:
       - Classic:  [{"endTime": "...", "artistName": "...", "trackName": "...", "msPlayed": N}]
       - Extended: [{"ts": "...", "master_metadata_track_artist_name": "...", "ms_played": N}]
 
-    If json_paths is a directory, all StreamingHistory*.json files within it
-    are loaded automatically.
+    If json_paths is a directory, all *.json files within it are loaded
+    automatically (non-streaming files are skipped based on content).
 
     Returns:
         DataFrame with columns: timestamp (UTC datetime), artist, track,
@@ -49,12 +49,7 @@ def load_streaming_history(
     if isinstance(json_paths, (str, Path)):
         p = Path(json_paths)
         if p.is_dir():
-            candidates = sorted(p.glob("StreamingHistory*.json")) + sorted(
-                p.glob("Streaming_History*.json")
-            )
-            if not candidates:
-                candidates = sorted(p.glob("*.json"))
-            json_paths = candidates
+            json_paths = sorted(p.glob("*.json"))
         else:
             json_paths = [p]
 
@@ -263,7 +258,7 @@ def build_session_model(
     High-level: load Spotify JSON files and build the session model.
 
     Args:
-        json_paths:      Path to StreamingHistory*.json file(s) or directory.
+        json_paths:      Path to a Spotify JSON export file or directory of JSON files.
         gap_minutes:     Gap threshold (minutes) for splitting sessions.
         half_life_days:  Recency decay half-life in days.
 

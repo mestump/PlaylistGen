@@ -149,7 +149,7 @@ def _welcome_first_run(cfg: dict) -> bool:
     if use_history:
         while True:
             history_path = questionary.text(
-                "Path to your StreamingHistory*.json file or folder containing them:",
+                "Path to folder containing your Spotify JSON export files (or a single .json file):",
             ).ask()
             if not history_path:
                 break
@@ -209,7 +209,7 @@ def edit_tokens(cfg: dict) -> None:
          "Last.fm API key (optional fallback for mood tags — visit last.fm/api/account/create)",
          ""),
         ("SPOTIFY_HISTORY_PATH",
-         "Spotify streaming history path (StreamingHistory*.json file or folder — from spotify.com privacy export)",
+         "Spotify streaming history path (folder of JSON files from spotify.com privacy export)",
          ""),
         ("SPOTIFY_CLIENT_ID",
          "Spotify Client ID (only needed for Discover mode — see developer.spotify.com)",
@@ -321,7 +321,7 @@ def _handle_spotify_setup(cfg: dict) -> None:
         print("Spotify streaming history is not configured.")
     print()
     print("Download your data at spotify.com → Account → Privacy settings → Download your data")
-    print("Then unzip and point to the folder containing StreamingHistory*.json files.")
+    print("Then unzip and point to the folder containing the JSON files.")
     print()
 
     while True:
