@@ -3,12 +3,14 @@
 import argparse
 import logging
 import os
+import sys
 from pathlib import Path
 
 import pandas as pd
 
 from .config import load_config
 from .pipeline import run_pipeline
+from .utils import validate_path
 
 
 def file_newer(a, b):
@@ -212,6 +214,23 @@ def main():
 
     lvl = args.log_level or cfg.get("LOG_LEVEL") or "INFO"
     logging.basicConfig(level=getattr(logging, lvl.upper(), logging.INFO))
+
+    # ------------------------------------------------------------------
+    # Validate user-provided paths early
+    # ------------------------------------------------------------------
+    try:
+        if getattr(args, "library_dir", None):
+            args.library_dir = validate_path(args.library_dir, must_exist=True)
+        if getattr(args, "m3u_file", None):
+            args.m3u_file = validate_path(args.m3u_file, must_exist=True)
+        if getattr(args, "file", None):
+            args.file = validate_path(args.file, must_exist=True)
+        if getattr(args, "output", None):
+            # Output file doesn't need to exist yet, but parent dir must resolve safely
+            validate_path(args.output, must_exist=False)
+    except ValueError as exc:
+        logging.error("Invalid path: %s", exc)
+        sys.exit(1)
 
     # ------------------------------------------------------------------
     # Command routing

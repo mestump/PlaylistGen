@@ -129,6 +129,13 @@ def batch_enrich_ollama(
         logging.warning("requests not installed — Ollama enrichment skipped.")
         return df
 
+    from ..utils import validate_url
+    try:
+        validate_url(base_url)
+    except ValueError as exc:
+        logging.error("Invalid Ollama base_url: %s", exc)
+        return df
+
     if cache_db is None:
         cache_db = str(Path.home() / ".playlistgen" / "ollama_enrichment.sqlite")
     cache_db = str(Path(cache_db).expanduser())
