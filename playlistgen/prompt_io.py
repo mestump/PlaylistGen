@@ -151,10 +151,13 @@ HOW TO USE
 
 def _format_enrich_line(i: int, row: pd.Series) -> str:
     """Build a compact, token-efficient track description line."""
-    artist = str(row.get("Artist") or "Unknown Artist").strip()
-    name = str(row.get("Name") or "Unknown Track").strip()
+    raw_artist = row.get("Artist")
+    artist = str(raw_artist).strip() if pd.notnull(raw_artist) and raw_artist else "Unknown Artist"
+    raw_name = row.get("Name")
+    name = str(raw_name).strip() if pd.notnull(raw_name) and raw_name else "Unknown Track"
     parts = [f"{artist} — {name}"]
-    genre = str(row.get("Genre") or "").strip()
+    raw_genre = row.get("Genre")
+    genre = str(raw_genre).strip() if pd.notnull(raw_genre) and raw_genre else ""
     if genre:
         parts.append(f"Genre:{genre}")
     bpm = row.get("BPM")
@@ -171,13 +174,17 @@ def _format_enrich_line(i: int, row: pd.Series) -> str:
 
 def _format_curate_line(i: int, row: pd.Series) -> str:
     """Build a richer track description for curation (includes mood/energy)."""
-    artist = str(row.get("Artist") or "Unknown Artist").strip()
-    name = str(row.get("Name") or "Unknown Track").strip()
+    raw_artist = row.get("Artist")
+    artist = str(raw_artist).strip() if pd.notnull(raw_artist) and raw_artist else "Unknown Artist"
+    raw_name = row.get("Name")
+    name = str(raw_name).strip() if pd.notnull(raw_name) and raw_name else "Unknown Track"
     parts = [f"{artist} — {name}"]
-    mood = str(row.get("Mood") or "").strip()
+    raw_mood = row.get("Mood")
+    mood = str(raw_mood).strip() if pd.notnull(raw_mood) and raw_mood else ""
     if mood and mood not in ("Unknown", ""):
         parts.append(f"Mood:{mood}")
-    genre = str(row.get("Genre") or "").strip()
+    raw_genre = row.get("Genre")
+    genre = str(raw_genre).strip() if pd.notnull(raw_genre) and raw_genre else ""
     if genre:
         parts.append(f"Genre:{genre}")
     energy = row.get("Energy")
