@@ -7,7 +7,7 @@ name = "playlistgen"
 version = "0.1.0"
 description = "Generate playlists based on Spotify history and iTunes library"
 authors = [{name = "Your Name", email = "you@example.com"}]
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 dependencies = [
     "pandas>=1.0",
     "PyYAML>=5.1",
@@ -21,6 +21,7 @@ dependencies = [
 [project.optional-dependencies]
 spotify = ["spotipy>=2.23"]
 tui = ["questionary>=1.10"]
+ollama = ["ollama>=0.1.0"]
 
 [project.scripts]
 playlistgen = "playlistgen.cli:main"
