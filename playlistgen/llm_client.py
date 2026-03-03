@@ -47,15 +47,19 @@ def _call_ollama(
         return prompt, 4
 
     raw = raw.strip()
-    if raw.startswith("`"+chr(96)+"json"):
-        start = len("`"+chr(96)+"json")
-    elif raw.startswith("`"+chr(96)):
+    if raw.startswith("```json"):
+        start = len("```json")
+    elif raw.startswith("```"):
         start = len("```")
     else:
         start = 0
     if start:
+        # Strip trailing fence if present
+        body = raw[start:]
+        if body.rstrip().endswith("```"):
+            body = body.rstrip()[:-3]
         try:
-            data_out = json.loads(raw[start:])
+            data_out = json.loads(body)
         except Exception:
             return prompt, 4
     else:
