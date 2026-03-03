@@ -42,7 +42,12 @@ def load_config(path: str = None) -> dict:
         "SPOTIFY_REDIRECT_URI": "http://localhost:8888/callback",
         # mutagen audio tag enrichment
         "MUTAGEN_ENABLED": True,
-        # AI playlist naming via Claude API
+        # AI playlist naming via local Ollama or Anthropic API
+        "OLLAMA_BASE_URL": None,
+        "OLLAMA_MODEL": "qwen35-tuned:latest",
+        "OLLAMA_ENRICH_MODEL": "qwen35-tuned:latest",
+        "OLLAMA_CURATE_MODEL": "qwen3.5:9b",
+        # AI playlist naming via Anthropic API
         "AI_ENHANCE": False,
         "ANTHROPIC_API_KEY": None,
         "AI_MODEL": "claude-haiku-4-5-20251001",

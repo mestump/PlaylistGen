@@ -219,6 +219,12 @@ def edit_tokens(cfg: dict) -> None:
         ("SPOTIFY_CLIENT_SECRET",
          "Spotify Client Secret (only needed for Discover mode)",
          ""),
+        ("OLLAMA_BASE_URL",
+         "Ollama backend URL for AI inference", 
+         "http://localhost:11434" ),
+        ("OLLAMA_MODEL",
+         "Ollama model name to use (default: qwen35-tuned:latest)",
+         "qwen35-tuned:latest"),
     ]
 
     for key, prompt, placeholder in fields:
