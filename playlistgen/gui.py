@@ -387,6 +387,8 @@ def _handle_export_spotify(cfg: dict) -> None:
         return
 
     private = questionary.confirm("Create as private playlist?", default=False).ask()
+    if private is None:
+        return
 
     # Parse M3U to get Artist - Name pairs
     tracks = []
