@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 import os
 
@@ -44,9 +45,9 @@ def load_config(path: str = None) -> dict:
         "MUTAGEN_ENABLED": True,
         # AI playlist naming via local Ollama or Anthropic API
         "OLLAMA_BASE_URL": None,
-        "OLLAMA_MODEL": "qwen35-tuned:latest",
-        "OLLAMA_ENRICH_MODEL": "qwen35-tuned:latest",
-        "OLLAMA_CURATE_MODEL": "qwen3.5:9b",
+        "OLLAMA_MODEL": "hf.co/unsloth/Qwen3.5-35B-A3B-GGUF:UD-IQ2_XXS",
+        "OLLAMA_ENRICH_MODEL": "hf.co/unsloth/Qwen3.5-35B-A3B-GGUF:UD-IQ2_XXS",
+        "OLLAMA_CURATE_MODEL": "hf.co/unsloth/Qwen3.5-35B-A3B-GGUF:UD-IQ2_XXS",
         # AI playlist naming via Anthropic API
         "AI_ENHANCE": False,
         "ANTHROPIC_API_KEY": None,
@@ -56,7 +57,8 @@ def load_config(path: str = None) -> dict:
         # Phase 2: local audio analysis (libROSA)
         "LIBROSA_ENABLED": True,
         "AUDIO_CACHE_DB": str(Path.home() / ".playlistgen" / "audio.sqlite"),
-        "AUDIO_ANALYSIS_WORKERS": 4,
+        "AUDIO_ANALYSIS_WORKERS": 0,
+        "AUDIO_ANALYSIS_DURATION": 120,
         # Phase 2: session model from Spotify streaming history JSON
         "SPOTIFY_HISTORY_PATH": None,
         "SESSION_GAP_MINUTES": 30,
@@ -112,16 +114,42 @@ def load_config(path: str = None) -> dict:
             else:
                 merged[key] = env_val
 
+    # Validate config values and log warnings for any corrections
+    from .utils import validate_config
+    warnings = validate_config(merged)
+    for w in warnings:
+        logging.warning("Config validation: %s", w)
+
     _config_cache = merged
     _config_path = config_path
     return _config_cache
 
 
 def save_config(cfg: dict, path: str | None = None) -> None:
-    """Persist configuration to disk."""
+    """
+    Persist configuration to disk.
+    
+    Security: Filters out sensitive keys (API keys) to prevent them from
+    being written to disk if they were loaded from environment variables.
+    """
     if yaml is None:
         raise RuntimeError("yaml is required to save config")
+    
+    # Create a copy to avoid modifying the active config
+    cfg_to_save = cfg.copy()
+    
+    # sensitive keys to exclude from file persistence
+    sensitive_keys = ["ANTHROPIC_API_KEY", "LASTFM_API_KEY"]
+    for key in sensitive_keys:
+        # Check if the key exists in the config to be saved
+        if key in cfg_to_save:
+            # Only remove if it appears to be a real key (not None/empty)
+            # effectively ensuring we don't write secrets to disk.
+            # Users must set these via env vars or manually edit the file.
+            if cfg_to_save[key]:
+                 cfg_to_save[key] = None
+
     p = Path(path or _config_path or "config.yml")
     p.parent.mkdir(parents=True, exist_ok=True)
     with open(p, "w", encoding="utf-8") as f:
-        yaml.safe_dump(cfg, f, default_flow_style=False)
+        yaml.safe_dump(cfg_to_save, f, default_flow_style=False)

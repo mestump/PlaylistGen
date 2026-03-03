@@ -77,7 +77,7 @@ def _call_ollama(
 
 def _call_llm(
     prompt,
-    model="qwen35-tuned",
+    model="hf.co/unsloth/Qwen3.5-35B-A3B-GGUF:UD-IQ2_XXS",
     base_url=None,
     api_key=None
 ) -> Tuple[str, int]:
@@ -89,8 +89,14 @@ def _call_llm(
     """
     from .config import load_config
     
+    from .utils import validate_url
     ollama_base_url = base_url or os.getenv("OLLAMA_BASE_URL")
     if ollama_base_url:
+        try:
+            validate_url(ollama_base_url)
+        except ValueError as e:
+            logging.error("Invalid OLLAMA_BASE_URL: %s", e)
+            return prompt, 0
         return _call_ollama(prompt, model, ollama_base_url)
     
     cfg: dict = load_config()
