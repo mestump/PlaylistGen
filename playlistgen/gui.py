@@ -347,6 +347,81 @@ def edit_config(cfg: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Spotify export helper
+# ---------------------------------------------------------------------------
+
+def _handle_export_spotify(cfg: dict) -> None:
+    """Let the user pick an M3U file and export it to their Spotify account."""
+    from .spotify_export import export_playlist_to_spotify
+
+    out_dir = cfg.get("OUTPUT_DIR", "./mixes")
+    m3u_dir = Path(out_dir).expanduser()
+
+    if not m3u_dir.is_dir():
+        print(f"  No playlist output directory found at {m3u_dir}")
+        print("  Generate a mix first, then export it.")
+        return
+
+    m3u_files = sorted(m3u_dir.glob("*.m3u"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if not m3u_files:
+        print(f"  No .m3u files found in {m3u_dir}")
+        print("  Generate a mix first, then export it to Spotify.")
+        return
+
+    choices = [Choice(f.stem, value=str(f)) for f in m3u_files[:20]]
+    choices.append(Choice("Cancel", value=None))
+
+    selected = questionary.select(
+        "Select a playlist to export to Spotify:",
+        choices=choices,
+    ).ask()
+    if not selected:
+        return
+
+    m3u_path = Path(selected)
+    playlist_name = questionary.text(
+        "Spotify playlist name:",
+        default=m3u_path.stem,
+    ).ask()
+    if not playlist_name:
+        return
+
+    private = questionary.confirm("Create as private playlist?", default=False).ask()
+
+    # Parse M3U to get Artist - Name pairs
+    tracks = []
+    for line in m3u_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line.startswith("#EXTINF:"):
+            info = line.split(",", 1)
+            if len(info) == 2:
+                parts = info[1].split(" - ", 1)
+                if len(parts) == 2:
+                    tracks.append({"Artist": parts[0].strip(), "Name": parts[1].strip()})
+
+    if not tracks:
+        print("  No tracks found in the M3U file.")
+        return
+
+    print(f"\n  Exporting {len(tracks)} tracks to Spotify…")
+
+    import pandas as pd
+    playlist_df = pd.DataFrame(tracks)
+    url = export_playlist_to_spotify(
+        playlist_df,
+        playlist_name,
+        cfg=cfg,
+        public=not private,
+    )
+
+    if url:
+        print(f"\n  Spotify playlist created: {url}")
+    else:
+        print("\n  Export failed. Check that SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET are set.")
+        print("  Configure them via 'Configure API keys & data paths' in the menu.")
+
+
+# ---------------------------------------------------------------------------
 # Spotify history setup helper
 # ---------------------------------------------------------------------------
 
@@ -740,6 +815,11 @@ def run_gui() -> str | None:
                 "Import AI response from file   (after pasting the AI's JSON response back)",
                 value="import_ai",
             ),
+            Separator("── Export ──"),
+            Choice(
+                "Export last playlist to Spotify  (push an M3U to your Spotify account)",
+                value="export_spotify",
+            ),
             Separator("── Setup & Maintenance ──"),
             Choice(
                 "Configure API keys & data paths  (Anthropic, Last.fm, Spotify history)",
@@ -926,6 +1006,9 @@ def _handle_action(action: str, cfg: dict) -> None:
         except Exception as exc:
             logging.exception("Recache failed")
             print(f"Recache failed: {exc}")
+
+    elif action == "export_spotify":
+        _handle_export_spotify(cfg)
 
     elif action == "spotify_setup":
         _handle_spotify_setup(cfg)
