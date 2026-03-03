@@ -110,102 +110,81 @@ def score_tracks(
     track_play_counts = profile.get("track_play_counts", {})
     track_skip_counts = profile.get("track_skip_counts", {})
 
-    moods_out = []
-    scores_out = []
+    # --- Compute track IDs vectorized ---
+    df["_track_id"] = (df["Artist"].astype(str) + " - " + df["Name"].astype(str)).str.strip().str.lower()
 
-    for _, row in df.iterrows():
-        track_id = f"{row['Artist']} - {row['Name']}".strip().lower()
-        artist = str(row.get("Artist", ""))
-        genre = str(row.get("Genre", "") or "")
-
-        play_count = int(row.get("Play Count", 0) or 0)
-        skip_count = int(row.get("Skip Count", 0) or 0)
-
-        # Tags for this track (handle legacy dict format)
-        tags = tag_mood_db.get(track_id, [])
+    # --- Compute moods (requires per-row tag lookup, but avoid iterrows) ---
+    def _resolve_mood(row):
+        existing = row.get("Mood")
+        if existing and existing not in ("Unknown", ""):
+            return existing
+        tid = row["_track_id"]
+        tags = tag_mood_db.get(tid, [])
         if isinstance(tags, dict):
             tags = tags.get("tags", [])
+        genre = str(row.get("Genre", "") or "")
+        mood = canonical_mood(tags, genre=genre if genre else None, tag_counts=tag_counts)
+        return mood if mood else "Unknown"
 
-        # Mood — use pre-computed value if batch enrichment ran, else derive
-        existing_mood = row.get("Mood")
-        if existing_mood and existing_mood not in ("Unknown", ""):
-            mood = existing_mood
-        else:
-            mood = canonical_mood(
-                tags, genre=genre if genre else None, tag_counts=tag_counts
-            )
-        moods_out.append(mood if mood else "Unknown")
+    df["Mood"] = df.apply(_resolve_mood, axis=1)
 
-        # --- Base score components ---
-        artist_score = artist_scores.get(artist, 0)
-        genre_score = genre_scores.get(genre.lower(), 0) if genre else 0
-        mood_score = mood_scores.get(mood, 0) if mood else 0
+    # --- Vectorized score computation ---
+    df["_artist_score"] = df["Artist"].map(artist_scores).fillna(0)
+    df["_genre_score"] = df["Genre"].fillna("").str.lower().map(genre_scores).fillna(0)
+    df["_mood_score"] = df["Mood"].map(mood_scores).fillna(0)
 
-        # Year score — use the Year column directly (FIXED: no more path parsing)
-        year_score = 0
-        raw_year = row.get("Year")
-        if raw_year is not None:
-            try:
-                year = int(float(raw_year))
-                if 1900 < year < 2100:
-                    year_score = year_scores.get(year, 0)
-            except (TypeError, ValueError):
-                pass
+    # Year score — vectorized
+    df["_year_int"] = pd.to_numeric(df.get("Year"), errors="coerce")
+    df["_year_score"] = df["_year_int"].map(year_scores).fillna(0)
+    # Zero out invalid years
+    df.loc[~df["_year_int"].between(1901, 2099), "_year_score"] = 0
 
-        # Spotify play/skip counts for this track
-        spotify_play = track_play_counts.get(track_id, 0)
-        spotify_skip = track_skip_counts.get(track_id, 0)
+    # Play/skip counts
+    play_col = pd.to_numeric(df.get("Play Count"), errors="coerce").fillna(0)
+    skip_col = pd.to_numeric(df.get("Skip Count"), errors="coerce").fillna(0)
+    spotify_play_col = df["_track_id"].map(track_play_counts).fillna(0)
+    spotify_skip_col = df["_track_id"].map(track_skip_counts).fillna(0)
 
-        score = (
-            w["artist"] * artist_score
-            + w["genre"] * genre_score
-            + w["mood"] * mood_score
-            + w["year"] * year_score
-            + w["play"] * (play_count + spotify_play)
-            + w["skip"] * (skip_count + spotify_skip)
-        )
+    df["Score"] = (
+        w["artist"] * df["_artist_score"]
+        + w["genre"] * df["_genre_score"]
+        + w["mood"] * df["_mood_score"]
+        + w["year"] * df["_year_score"]
+        + w["play"] * (play_col + spotify_play_col)
+        + w["skip"] * (skip_col + spotify_skip_col)
+    )
 
-        # --- Session model bonus components (Phase 2) ---
-        if session_model:
-            # 1. Recency multiplier: boost tracks the user played recently.
-            #    recency_weight in [0, 1]. Multiplier ranges from 1.0x (not in
-            #    history) to 1.5x (most recently played).
-            recency_weight = recency_map.get(track_id, 0.0)
-            score *= 1.0 + 0.5 * recency_weight
+    # --- Session model bonus (vectorized where possible) ---
+    if session_model:
+        # 1. Recency multiplier
+        recency_col = df["_track_id"].map(recency_map).fillna(0)
+        df["Score"] = df["Score"] * (1.0 + 0.5 * recency_col)
 
-            # 2. Co-occurrence boost: add a bonus for tracks that often appear
-            #    in the same listening sessions as the user's most-played tracks.
-            if top_played and cooccurrence_map:
-                co_boost = sum(
-                    cooccurrence_map.get(fav, {}).get(track_id, 0)
+        # 2. Co-occurrence boost
+        if top_played and cooccurrence_map:
+            def _co_boost(tid):
+                return sum(
+                    cooccurrence_map.get(fav, {}).get(tid, 0)
                     for fav in top_played
                 )
-                score += 0.05 * min(co_boost / 50.0, 1.0)
+            co_col = df["_track_id"].map(_co_boost)
+            df["Score"] = df["Score"] + 0.05 * (co_col / 50.0).clip(upper=1.0)
 
-            # 3. Energy preference match: if the track has energy data, boost
-            #    it if its energy level matches the user's preferred listening energy.
-            if energy_preference is not None:
-                energy = row.get("Energy")
-                if energy is not None and pd.notnull(energy):
-                    try:
-                        energy_match = 1.0 - abs(float(energy) - energy_preference) / 10.0
-                        score += 0.1 * max(energy_match, 0)
-                    except (TypeError, ValueError):
-                        pass
+        # 3. Energy preference match
+        if energy_preference is not None and "Energy" in df.columns:
+            energy_col = pd.to_numeric(df["Energy"], errors="coerce")
+            energy_match = (1.0 - (energy_col - energy_preference).abs() / 10.0).clip(lower=0)
+            df["Score"] = df["Score"] + 0.1 * energy_match.fillna(0)
 
-        scores_out.append(score)
-
-    df["Mood"] = moods_out
-    df["Score"] = scores_out
+    # Clean up temporary columns
+    df.drop(columns=["_track_id", "_artist_score", "_genre_score", "_mood_score",
+                      "_year_int", "_year_score"], inplace=True)
 
     # Compute energy_preference lazily after scoring if session_model present
-    # (used for subsequent calls; no effect on this call's scores)
     if session_model and "Energy" in df.columns and top_played:
-        top_played_mask = df.apply(
-            lambda r: f"{r.get('Artist','')} - {r.get('Name','')}".lower()
-            in top_played,
-            axis=1,
-        )
+        track_ids = (df["Artist"].astype(str) + " - " + df["Name"].astype(str)).str.lower()
+        top_set = set(top_played)
+        top_played_mask = track_ids.isin(top_set)
         energy_vals = pd.to_numeric(
             df.loc[top_played_mask, "Energy"], errors="coerce"
         ).dropna()
