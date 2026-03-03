@@ -9,7 +9,6 @@ mutagen's easy-interface.
 
 import logging
 from pathlib import Path
-from typing import Optional
 from urllib.parse import unquote
 
 import pandas as pd

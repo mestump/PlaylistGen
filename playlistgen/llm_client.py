@@ -8,7 +8,7 @@ Otherwise → falls back to Anthropic API if ANTHROPIC_API_KEY is configured
 import json
 import logging
 import os
-from typing import Tuple, Optional
+from typing import Tuple
 try:
     import requests
 except ImportError:
