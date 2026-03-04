@@ -5,9 +5,16 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 
+def _get_text_series(df: pd.DataFrame, col: str) -> pd.Series:
+    """Safely get a text column, returning empty strings if column is missing."""
+    if col in df.columns:
+        return df[col].fillna("").astype(str)
+    return pd.Series([""] * len(df))
+
+
 def build_vectorizer(playlists: List[pd.DataFrame]) -> TfidfVectorizer:
     texts = [
-        " ".join((p.get("Genre", "").fillna("") + " " + p.get("Mood", "").fillna(" ")).tolist())
+        " ".join((_get_text_series(p, "Genre") + " " + _get_text_series(p, "Mood")).tolist())
         for p in playlists
     ]
     vectorizer = TfidfVectorizer()
@@ -17,9 +24,9 @@ def build_vectorizer(playlists: List[pd.DataFrame]) -> TfidfVectorizer:
 
 def playlist_vector(df: pd.DataFrame, vectorizer: Optional[TfidfVectorizer] = None) -> np.ndarray:
     text = " ".join(
-        (df.get("Genre", "").fillna("") + " " + df.get("Mood", "").fillna("")).tolist()
+        (_get_text_series(df, "Genre") + " " + _get_text_series(df, "Mood")).tolist()
     )
-    if not text:
+    if not text.strip():
         return np.zeros(1)
     if vectorizer is None:
         vectorizer = TfidfVectorizer()

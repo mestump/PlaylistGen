@@ -8,11 +8,9 @@ from sklearn.cluster import KMeans
 
 
 def _playlist_text(df: pd.DataFrame) -> List[str]:
-    return (
-        df.get("Genre", "").fillna("").astype(str)
-        + " "
-        + df.get("Mood", "").fillna("").astype(str)
-    ).tolist()
+    genre = df["Genre"].fillna("").astype(str) if "Genre" in df.columns else pd.Series([""] * len(df))
+    mood = df["Mood"].fillna("").astype(str) if "Mood" in df.columns else pd.Series([""] * len(df))
+    return (genre + " " + mood).tolist()
 
 
 def vectorize_playlists(
