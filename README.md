@@ -16,10 +16,9 @@ Each run it:
    with **mutagen** — no internet required for this step.
 2. Analyses audio features (tempo, energy, brightness) locally with
    **libROSA** — again, fully offline.
-3. Optionally enriches mood/energy metadata via **Claude** — either through
-   the API (~$0.001 / track, cached indefinitely) or the **free paste-in
-   workflow** where you copy a generated prompt into Claude.ai / ChatGPT /
-   Gemini and paste the JSON response back. No API key required.
+3. Optionally enriches mood/energy metadata via **Claude** (API or free
+   paste-in workflow), or a **local Ollama model** running on your own
+   machine — no API key or internet required for the Ollama path.
 4. Builds a **session model** from your Spotify streaming-history JSON export,
    learning which tracks you play together and which you've played recently.
 5. Scores every track by combining plays, skips, recency, and co-occurrence.
@@ -112,6 +111,13 @@ The menu is divided into four sections:
 | **Claude: Smart playlist curation** | Sends your top-scored tracks to Claude (Sonnet) which groups them into 5–10 themed playlists with descriptive names |
 | **Claude: Enrich library metadata** | Sends tracks in batches of 100 to Claude (Haiku) which classifies each track's Mood, Energy, and Valence. Results are cached in SQLite so only new tracks are re-analysed |
 
+### AI Features *(local Ollama — fully offline, no API key)*
+
+| Option | What it does |
+|--------|-------------|
+| **Ollama: Smart playlist curation** | Same curation workflow as Claude but using a local Ollama model. Requires `OLLAMA_BASE_URL` to be set |
+| **Ollama: Enrich library metadata** | Batch mood/energy enrichment via local model — used automatically as a fallback when Claude is unavailable |
+
 ### AI Features *(no API key needed)*
 
 | Option | What it does |
@@ -121,11 +127,17 @@ The menu is divided into four sections:
 | **Generate AI curation prompt** | Same paste-in workflow for full playlist curation — the AI groups your tracks into themed playlists, you paste the response back, and the M3Us are written immediately |
 | **Import AI response from file** | Import a previously generated prompt file or raw JSON artifact — auto-detects enrich vs curate mode |
 
+### Spotify
+
+| Option | What it does |
+|--------|-------------|
+| **Export playlist to Spotify** | Pick any generated M3U and push it directly to your Spotify account as a new playlist. Requires `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET` in config |
+
 ### Setup & Maintenance
 
 | Option | What it does |
 |--------|-------------|
-| **Configure API keys & data paths** | Set your Anthropic key, Last.fm key, Spotify history folder, etc. |
+| **Configure API keys & data paths** | Set your Anthropic key, Last.fm key, Ollama URL, Spotify credentials, etc. |
 | **Re-configure Spotify history** | Update the Spotify streaming history path with live validation — shows play count and date range immediately, lets you retry if the path is wrong |
 | **Refresh metadata cache** | Re-fetches Last.fm tags for tracks not yet in the cache (only new tracks are fetched) |
 
@@ -186,6 +198,10 @@ python -m playlistgen export-ai-prompt --mode curate --n-playlists 8
 # Import any AI response — plain JSON artifact from Claude.ai, or a .txt prompt file
 python -m playlistgen import-ai-result batch_1_enrichment.json
 python -m playlistgen import-ai-result playlistgen_enrich_prompt.txt
+
+# Export a generated playlist to Spotify (requires Spotify app credentials in config)
+python -m playlistgen spotify-export ./mixes/Late-Night\ Drive.m3u
+python -m playlistgen spotify-export ./mixes/Morning\ Run.m3u --name "My Morning Run" --private
 ```
 
 ### Examples
@@ -267,6 +283,23 @@ The interactive menu writes to whichever config file was found (or creates
 | `AI_CURATE_MODEL` | `claude-sonnet-4-6` | Model for full curation (more capable) |
 | `AI_ENRICH_CACHE_DB` | `~/.playlistgen/claude_enrichment.sqlite` | SQLite cache for enrichment results |
 
+#### AI Features (local Ollama)
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `OLLAMA_BASE_URL` | *(none)* | Ollama server URL (e.g. `http://localhost:11434`). Enables Ollama backend when set |
+| `OLLAMA_MODEL` | `hf.co/unsloth/Qwen3.5-35B-A3B-GGUF:UD-IQ2_XXS` | Default Ollama model |
+| `OLLAMA_ENRICH_MODEL` | *(same as OLLAMA_MODEL)* | Model used for batch metadata enrichment |
+| `OLLAMA_CURATE_MODEL` | *(same as OLLAMA_MODEL)* | Model used for playlist curation |
+
+#### Spotify Export
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `SPOTIFY_CLIENT_ID` | *(none)* | Spotify app client ID (create at [developer.spotify.com](https://developer.spotify.com/dashboard)) |
+| `SPOTIFY_CLIENT_SECRET` | *(none)* | Spotify app client secret |
+| `SPOTIFY_REDIRECT_URI` | `http://localhost:8888/callback` | OAuth redirect URI — must match your Spotify app settings |
+
 #### Session Model (Spotify history)
 
 | Key | Default | Description |
@@ -321,8 +354,10 @@ iTunes XML / music folder
             → sends 100 tracks at a time to Claude Haiku
             → classifies Mood, Energy (1–10), Valence (1–10)
             → cached indefinitely
-         b. Last.fm tag lookup (if LASTFM_API_KEY set and mood still unknown)
-         c. Embedded tag fallback (mutagen Mood/Comment field)
+         b. Ollama batch enrichment (if OLLAMA_BASE_URL set, used as fallback)
+            → same classification via local model, fully offline
+         c. Last.fm tag lookup (if LASTFM_API_KEY set and mood still unknown)
+         d. Embedded tag fallback (mutagen Mood/Comment field)
         │
         ▼
   4. Session model       Reads Spotify StreamingHistory JSON files
@@ -351,6 +386,11 @@ iTunes XML / music folder
         │
         ▼
   8. M3U export          One .m3u file per playlist → OUTPUT_DIR/
+        │
+        ▼
+  9. Spotify export (optional)
+                         Push any M3U playlist directly to your Spotify account
+                         via spotipy OAuth (SPOTIFY_CLIENT_ID / SECRET required)
 ```
 
 ---
@@ -380,6 +420,43 @@ entirely when enabled.
 
 Enable via config (`AI_CURATE: true`) or CLI (`--ai-curate`) or the
 interactive menu.
+
+### Ollama: local AI (fully offline)
+
+If you have [Ollama](https://ollama.com) running locally, set `OLLAMA_BASE_URL`
+in your config and PlaylistGen will use it as a drop-in replacement for Claude
+— no API key, no internet, no cost per track.
+
+```yaml
+OLLAMA_BASE_URL: http://localhost:11434
+OLLAMA_ENRICH_MODEL: hf.co/unsloth/Qwen3.5-35B-A3B-GGUF:UD-IQ2_XXS
+```
+
+Ollama is used **automatically as a fallback** in the pipeline when Claude
+enrichment is unavailable. You can also trigger it explicitly from the GUI
+menu or set it as the primary enricher.
+
+### Spotify export
+
+Push any generated M3U playlist directly to your Spotify library:
+
+```bash
+python -m playlistgen spotify-export ./mixes/Late-Night\ Drive.m3u
+python -m playlistgen spotify-export ./mixes/Morning\ Run.m3u --name "My Morning Run" --private
+```
+
+Or use the **Export playlist to Spotify** option in the GUI menu.
+
+**Setup** — create a Spotify app at [developer.spotify.com](https://developer.spotify.com/dashboard),
+add `http://localhost:8888/callback` as a redirect URI, then set in config:
+
+```yaml
+SPOTIFY_CLIENT_ID: your_client_id
+SPOTIFY_CLIENT_SECRET: your_client_secret
+```
+
+The first export opens a browser for OAuth authorisation. The token is cached
+for subsequent runs.
 
 ### AI features without an API key (paste-in workflow)
 
@@ -508,7 +585,7 @@ new or changed files are re-analysed.
 python -m pytest tests/ -v
 ```
 
-132 tests across unit and integration suites. All pass on Python 3.10+.
+425 tests across unit and integration suites. All pass on Python 3.10+.
 
 ### Project structure
 
@@ -521,15 +598,25 @@ PlaylistGen/
 │   ├── gui.py               questionary interactive menu
 │   ├── pipeline.py          10-stage orchestration pipeline
 │   ├── config.py            config loading / saving
+│   ├── utils.py             path/URL validation and shared helpers
 │   ├── itunes.py            iTunes XML → DataFrame
-│   ├── audio_analysis.py    libROSA feature extraction + SQLite cache
+│   ├── metadata.py          tag extraction and enrichment helpers
+│   ├── audio_analysis.py    libROSA feature extraction + SQLite cache (ProcessPoolExecutor)
 │   ├── session_model.py     Spotify history → co-occurrence + recency
+│   ├── llm_client.py        dispatcher: routes AI calls to Claude or Ollama
 │   ├── ai_enhancer.py       Claude batch enrichment + curation (API path)
+│   ├── enrichers/
+│   │   └── ollama_enricher.py  Ollama batch metadata enrichment (fully offline)
 │   ├── prompt_io.py         Paste-in AI workflow — prompt export + response import
 │   ├── clustering.py        KMeans / mood / TF-IDF clustering
-│   ├── scoring.py           composite track scorer
+│   ├── scoring.py           composite track scorer (vectorized)
 │   ├── playlist_builder.py  M3U writer
+│   ├── playlist_scraper.py  Spotify track discovery via API
 │   ├── seed_playlist.py     seed-song similarity search
+│   ├── similarity.py        audio feature similarity helpers
+│   ├── pattern_analyzer.py  listening pattern analysis
+│   ├── spotify_export.py    push M3U playlists to Spotify via OAuth
+│   ├── spotify_profile.py   Spotify taste profile helpers
 │   ├── tag_mood_service.py  Last.fm tag cache
 │   └── train_model.py       (legacy) Spotify scraping model trainer
 └── tests/
@@ -537,7 +624,7 @@ PlaylistGen/
     ├── test_session_model.py
     ├── test_clustering*.py
     ├── test_scoring*.py
-    └── ...
+    └── ...  (425 tests total)
 ```
 
 ---
