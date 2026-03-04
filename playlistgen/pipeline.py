@@ -137,8 +137,15 @@ def run_pipeline(
                     )
                 ).expanduser()
             )
-            workers = int(cfg.get("AUDIO_ANALYSIS_WORKERS", 4))
-            df = analyze_library(df, db_path=audio_cache, enabled=librosa_enabled, workers=workers)
+            workers = int(cfg.get("AUDIO_ANALYSIS_WORKERS", 0))
+            duration = int(cfg.get("AUDIO_ANALYSIS_DURATION", 120))
+            df = analyze_library(
+                df,
+                db_path=audio_cache,
+                enabled=librosa_enabled,
+                workers=workers,
+                duration=duration,
+            )
         except Exception as exc:
             logging.warning("Audio analysis stage failed: %s — continuing.", exc)
 
@@ -174,6 +181,23 @@ def run_pipeline(
             )
         except Exception as exc:
             logging.warning("Claude batch enrichment failed: %s — falling back.", exc)
+
+    # Ollama enrichment fallback: if no Claude API key but Ollama is configured
+    ollama_base_url = cfg.get("OLLAMA_BASE_URL")
+    if ai_batch_enrich and not api_key and ollama_base_url and not no_ai:
+        logging.info("Stage 3a: Ollama batch metadata enrichment (local)…")
+        try:
+            from .enrichers.ollama_enricher import batch_enrich_ollama
+
+            df = batch_enrich_ollama(
+                df,
+                base_url=ollama_base_url,
+                model=cfg.get("OLLAMA_ENRICH_MODEL", cfg.get("OLLAMA_MODEL", "llama3")),
+                batch_size=int(cfg.get("AI_ENRICH_BATCH_SIZE", 50)),
+                rate_limit_ms=int(cfg.get("AI_ENRICH_RATE_LIMIT_MS", 0)),
+            )
+        except Exception as exc:
+            logging.warning("Ollama batch enrichment failed: %s — falling back.", exc)
 
     # Last.fm tag cache (runs even alongside Claude enrichment for tracks Claude missed)
     ensure_tag_cache(cfg, itunes_json)

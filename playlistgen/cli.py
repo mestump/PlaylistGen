@@ -3,10 +3,14 @@
 import argparse
 import logging
 import os
+import sys
 from pathlib import Path
+
+import pandas as pd
 
 from .config import load_config
 from .pipeline import run_pipeline
+from .utils import validate_path
 
 
 def file_newer(a, b):
@@ -187,11 +191,46 @@ def main():
         help="Scan a local music directory (needed for curate mode import)",
     )
 
+    spotify_export_parser = subparsers.add_parser(
+        "export-to-spotify",
+        help="Export a generated M3U playlist to your Spotify account",
+    )
+    spotify_export_parser.add_argument(
+        "m3u_file",
+        help="Path to the M3U playlist file to export",
+    )
+    spotify_export_parser.add_argument(
+        "--name",
+        help="Spotify playlist name (defaults to M3U filename)",
+    )
+    spotify_export_parser.add_argument(
+        "--private",
+        action="store_true",
+        help="Create as a private playlist (default: public)",
+    )
+
     args = parser.parse_args()
     cfg = load_config()
 
     lvl = args.log_level or cfg.get("LOG_LEVEL") or "INFO"
     logging.basicConfig(level=getattr(logging, lvl.upper(), logging.INFO))
+
+    # ------------------------------------------------------------------
+    # Validate user-provided paths early
+    # ------------------------------------------------------------------
+    try:
+        if getattr(args, "library_dir", None):
+            args.library_dir = validate_path(args.library_dir, must_exist=True)
+        if getattr(args, "m3u_file", None):
+            args.m3u_file = validate_path(args.m3u_file, must_exist=True)
+        if getattr(args, "file", None):
+            args.file = validate_path(args.file, must_exist=True)
+        if getattr(args, "output", None):
+            # Output file doesn't need to exist yet, but parent dir must resolve safely
+            validate_path(args.output, must_exist=False)
+    except ValueError as exc:
+        logging.error("Invalid path: %s", exc)
+        sys.exit(1)
 
     # ------------------------------------------------------------------
     # Command routing
@@ -365,6 +404,43 @@ def main():
             for label, playlist_df in playlists:
                 save_m3u(playlist_df, label, out_dir=out_dir)
                 logging.info("Playlist '%s' written to %s", label, out_dir)
+
+    elif args.command == "export-to-spotify":
+        from .spotify_export import export_playlist_to_spotify
+
+        m3u_path = Path(args.m3u_file)
+        if not m3u_path.exists():
+            logging.error("M3U file not found: %s", m3u_path)
+            return
+
+        # Parse M3U to extract Artist - Name pairs
+        tracks = []
+        for line in m3u_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line.startswith("#EXTINF:"):
+                # Format: #EXTINF:duration,Artist - Name
+                info = line.split(",", 1)
+                if len(info) == 2:
+                    parts = info[1].split(" - ", 1)
+                    if len(parts) == 2:
+                        tracks.append({"Artist": parts[0].strip(), "Name": parts[1].strip()})
+        if not tracks:
+            logging.error("No tracks found in M3U file.")
+            return
+
+        playlist_df = pd.DataFrame(tracks)
+        playlist_name = args.name or m3u_path.stem
+
+        url = export_playlist_to_spotify(
+            playlist_df,
+            playlist_name,
+            cfg=cfg,
+            public=not getattr(args, "private", False),
+        )
+        if url:
+            print(f"Spotify playlist created: {url}")
+        else:
+            logging.error("Spotify export failed.")
 
     elif args.command is None and (args.genre or args.mood or args.library_dir):
         # Apply CLI flag overrides to cfg before running pipeline

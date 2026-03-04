@@ -11,6 +11,7 @@ from questionary import Separator, Choice
 from .config import load_config, save_config
 from .pipeline import run_pipeline
 from .seed_playlist import build_seed_playlist
+from .utils import validate_path, validate_url
 
 
 # ---------------------------------------------------------------------------
@@ -95,8 +96,9 @@ def _welcome_first_run(cfg: dict) -> bool:
     Returns True if setup was completed, False if user skipped.
     """
     itunes_json = Path(cfg.get("ITUNES_JSON", "itunes_slimmed.json"))
-    itunes_xml = Path(cfg.get("ITUNES_XML", "iTunes Music Library.xml"))
-    has_library = itunes_json.exists() or itunes_xml.exists()
+    itunes_xml_str = cfg.get("ITUNES_XML", "iTunes Music Library.xml")
+    itunes_xml = Path(itunes_xml_str) if itunes_xml_str else None
+    has_library = itunes_json.exists() or (itunes_xml is not None and itunes_xml.exists())
 
     if has_library:
         return False  # not first run
@@ -133,14 +135,22 @@ def _welcome_first_run(cfg: dict) -> bool:
             default=str(itunes_xml),
         ).ask()
         if xml_path:
-            cfg["ITUNES_XML"] = xml_path
+            try:
+                cfg["ITUNES_XML"] = validate_path(xml_path, must_exist=True)
+            except ValueError as exc:
+                print(f"  Warning: {exc} — path stored but may not work.")
+                cfg["ITUNES_XML"] = xml_path
     else:
         lib_dir = questionary.text(
             "Path to your music folder",
             default=str(Path.home() / "Music"),
         ).ask()
         if lib_dir:
-            cfg["LIBRARY_DIR"] = lib_dir
+            try:
+                cfg["LIBRARY_DIR"] = validate_path(lib_dir, must_exist=True)
+            except ValueError as exc:
+                print(f"  Warning: {exc} — path stored but may not work.")
+                cfg["LIBRARY_DIR"] = lib_dir
 
     # Spotify history
     print()
@@ -219,6 +229,12 @@ def edit_tokens(cfg: dict) -> None:
         ("SPOTIFY_CLIENT_SECRET",
          "Spotify Client Secret (only needed for Discover mode)",
          ""),
+        ("OLLAMA_BASE_URL",
+         "Ollama backend URL for AI inference", 
+         "http://localhost:11434" ),
+        ("OLLAMA_MODEL",
+         "Ollama model name to use (default: hf.co/unsloth/Qwen3.5-35B-A3B-GGUF:UD-IQ2_XXS)",
+         "hf.co/unsloth/Qwen3.5-35B-A3B-GGUF:UD-IQ2_XXS"),
     ]
 
     for key, prompt, placeholder in fields:
@@ -235,6 +251,19 @@ def edit_tokens(cfg: dict) -> None:
             # Entered a space or just pressed enter on empty — clear it
             cfg.pop(key, None)
         else:
+            # Validate URLs before storing
+            if "URL" in key and answer:
+                try:
+                    validate_url(answer)
+                except ValueError as exc:
+                    print(f"  Warning: {exc}")
+                    continue
+            # Validate file paths before storing
+            if "PATH" in key and answer and "URL" not in key:
+                try:
+                    answer = validate_path(answer, must_exist=True)
+                except ValueError as exc:
+                    print(f"  Warning: {exc} — stored anyway.")
             cfg[key] = answer
 
     # Auto-enable AI features if key was just set
@@ -298,9 +327,100 @@ def edit_config(cfg: dict) -> None:
 
     val = questionary.text(f"New value for {key}:", default=str(cfg.get(key, ""))).ask()
     if val is not None:
+        # Validate URL-type keys
+        if "URL" in key and val.strip():
+            try:
+                validate_url(val.strip())
+            except ValueError as exc:
+                print(f"  Invalid URL: {exc}")
+                return
+        # Validate path-type keys
+        if "PATH" in key and "URL" not in key and val.strip():
+            try:
+                val = validate_path(val.strip(), must_exist=False)
+            except ValueError as exc:
+                print(f"  Invalid path: {exc}")
+                return
         cfg[key] = val
         save_config(cfg)
         print(f"  {key} updated.")
+
+
+# ---------------------------------------------------------------------------
+# Spotify export helper
+# ---------------------------------------------------------------------------
+
+def _handle_export_spotify(cfg: dict) -> None:
+    """Let the user pick an M3U file and export it to their Spotify account."""
+    from .spotify_export import export_playlist_to_spotify
+
+    out_dir = cfg.get("OUTPUT_DIR", "./mixes")
+    m3u_dir = Path(out_dir).expanduser()
+
+    if not m3u_dir.is_dir():
+        print(f"  No playlist output directory found at {m3u_dir}")
+        print("  Generate a mix first, then export it.")
+        return
+
+    m3u_files = sorted(m3u_dir.glob("*.m3u"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if not m3u_files:
+        print(f"  No .m3u files found in {m3u_dir}")
+        print("  Generate a mix first, then export it to Spotify.")
+        return
+
+    choices = [Choice(f.stem, value=str(f)) for f in m3u_files[:20]]
+    choices.append(Choice("Cancel", value=None))
+
+    selected = questionary.select(
+        "Select a playlist to export to Spotify:",
+        choices=choices,
+    ).ask()
+    if not selected:
+        return
+
+    m3u_path = Path(selected)
+    playlist_name = questionary.text(
+        "Spotify playlist name:",
+        default=m3u_path.stem,
+    ).ask()
+    if not playlist_name:
+        return
+
+    private = questionary.confirm("Create as private playlist?", default=False).ask()
+    if private is None:
+        return
+
+    # Parse M3U to get Artist - Name pairs
+    tracks = []
+    for line in m3u_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line.startswith("#EXTINF:"):
+            info = line.split(",", 1)
+            if len(info) == 2:
+                parts = info[1].split(" - ", 1)
+                if len(parts) == 2:
+                    tracks.append({"Artist": parts[0].strip(), "Name": parts[1].strip()})
+
+    if not tracks:
+        print("  No tracks found in the M3U file.")
+        return
+
+    print(f"\n  Exporting {len(tracks)} tracks to Spotify…")
+
+    import pandas as pd
+    playlist_df = pd.DataFrame(tracks)
+    url = export_playlist_to_spotify(
+        playlist_df,
+        playlist_name,
+        cfg=cfg,
+        public=not private,
+    )
+
+    if url:
+        print(f"\n  Spotify playlist created: {url}")
+    else:
+        print("\n  Export failed. Check that SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET are set.")
+        print("  Configure them via 'Configure API keys & data paths' in the menu.")
 
 
 # ---------------------------------------------------------------------------
@@ -697,6 +817,11 @@ def run_gui() -> str | None:
                 "Import AI response from file   (after pasting the AI's JSON response back)",
                 value="import_ai",
             ),
+            Separator("── Export ──"),
+            Choice(
+                "Export last playlist to Spotify  (push an M3U to your Spotify account)",
+                value="export_spotify",
+            ),
             Separator("── Setup & Maintenance ──"),
             Choice(
                 "Configure API keys & data paths  (Anthropic, Last.fm, Spotify history)",
@@ -883,6 +1008,9 @@ def _handle_action(action: str, cfg: dict) -> None:
         except Exception as exc:
             logging.exception("Recache failed")
             print(f"Recache failed: {exc}")
+
+    elif action == "export_spotify":
+        _handle_export_spotify(cfg)
 
     elif action == "spotify_setup":
         _handle_spotify_setup(cfg)

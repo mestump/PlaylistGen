@@ -23,6 +23,7 @@ from typing import List, Optional, Tuple
 import pandas as pd
 
 from .utils import progress_bar
+from .llm_client import _call_llm
 
 
 def _summarise_cluster(df: pd.DataFrame) -> str:
@@ -101,45 +102,52 @@ def enhance_playlists(
     api_key: str,
     model: str = "claude-haiku-4-5-20251001",
     min_cohesion: int = 4,
+    cfg: Optional[dict] = None,
 ) -> List[Tuple[str, pd.DataFrame]]:
     """
-    Enhance playlist labels using the Claude API.
+    Enhance playlist labels using a local Ollama model or the Claude API.
 
     For each (label, DataFrame) pair:
       - Summarises the cluster metadata.
-      - Asks Claude for a creative playlist name and cohesion score.
+      - Calls _call_llm() which dispatches to Ollama (if OLLAMA_BASE_URL set)
+        or Claude API (if ANTHROPIC_API_KEY set).
       - Replaces the label if a valid name is returned.
       - Logs a warning for clusters with low cohesion (< min_cohesion).
 
     Args:
         labelled:     List of (label, DataFrame) tuples from clustering.
-        api_key:      Anthropic API key.
-        model:        Claude model ID (default: haiku for speed/cost).
+        api_key:      Anthropic API key (used if no Ollama backend configured).
+        model:        Model ID — Claude model or Ollama model name.
         min_cohesion: Cohesion threshold below which a warning is logged.
+        cfg:          Config dict (used to resolve OLLAMA_BASE_URL/model).
 
     Returns:
         Updated list of (label, DataFrame) tuples with AI-generated names
         where available; original labels where API calls fail.
     """
-    try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
-    except ImportError:
-        logging.warning(
-            "anthropic package not installed — AI enhancement disabled. "
-            "Run: pip install anthropic"
-        )
-        return labelled
-    except Exception as exc:
-        logging.warning("Could not initialise Anthropic client: %s", exc)
-        return labelled
+    from .config import load_config
+    if cfg is None:
+        cfg = load_config()
+
+    ollama_base_url = cfg.get("OLLAMA_BASE_URL")
+    ollama_model = cfg.get("OLLAMA_MODEL", model)
+    effective_model = ollama_model if ollama_base_url else model
 
     enhanced = []
     for label, df in labelled:
         summary = _summarise_cluster(df)
         logging.debug("AI enhancing '%s': %s", label, summary)
 
-        name, cohesion = _call_claude(summary, api_key, model, client)
+        try:
+            name, cohesion = _call_llm(
+                summary,
+                model=effective_model,
+                base_url=ollama_base_url,
+                api_key=api_key,
+            )
+        except Exception as exc:
+            logging.warning("AI naming failed for '%s': %s", label, exc)
+            name, cohesion = "", 0
 
         if name:
             if cohesion < min_cohesion:

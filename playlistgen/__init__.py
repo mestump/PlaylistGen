@@ -21,6 +21,7 @@ from .playlist_scraper import (
     fetch_youtube_playlists,
     fetch_apple_music_playlists,
 )
+from .spotify_export import export_playlist_to_spotify
 
 try:
     from .gui import run_gui
@@ -59,6 +60,7 @@ __all__ = [
     "fetch_spotify_playlists",
     "fetch_youtube_playlists",
     "fetch_apple_music_playlists",
+    "export_playlist_to_spotify",
     "run_gui",
     "analyze_track",
     "analyze_library",

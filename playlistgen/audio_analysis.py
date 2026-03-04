@@ -18,12 +18,13 @@ import logging
 import os
 import sqlite3
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional
 from urllib.parse import unquote
 
 import pandas as pd
+from tqdm import tqdm
 
 try:
     import librosa
@@ -63,15 +64,13 @@ def _init_db(db_path: str) -> sqlite3.Connection:
 def _resolve_path(raw: str) -> str:
     """Decode file://localhost URLs to plain filesystem paths."""
     if raw.startswith("file://localhost"):
-        return unquote(raw[len("file://localhost"):])
+        return unquote(raw[len("file://localhost") :])
     if raw.startswith("file://"):
-        return unquote(raw[len("file://"):])
+        return unquote(raw[len("file://") :])
     return raw
 
 
-def _cache_get(
-    conn: sqlite3.Connection, path: str, mtime: float
-) -> Optional[dict]:
+def _cache_get(conn: sqlite3.Connection, path: str, mtime: float) -> Optional[dict]:
     row = conn.execute(
         "SELECT bpm, energy, spectral_brightness, zcr "
         "FROM audio_features WHERE path=? AND mtime=?",
@@ -107,11 +106,68 @@ def _cache_set(
     conn.commit()
 
 
-def analyze_track(file_path: str) -> dict:
+def _cache_get_batch(
+    conn: sqlite3.Connection, paths_mtimes: list[tuple[str, float]]
+) -> dict[str, dict]:
+    """Batch cache lookup. Returns {path: {bpm, energy, spectral_brightness, zcr}}."""
+    if not paths_mtimes:
+        return {}
+    result = {}
+    # SQLite max variables is 999; batch in chunks of 400 (2 params each)
+    chunk_size = 400
+    for i in range(0, len(paths_mtimes), chunk_size):
+        chunk = paths_mtimes[i : i + chunk_size]
+        placeholders = " OR ".join(["(path=? AND mtime=?)"] * len(chunk))
+        params = []
+        for p, m in chunk:
+            params.extend([p, m])
+        rows = conn.execute(
+            f"SELECT path, bpm, energy, spectral_brightness, zcr "
+            f"FROM audio_features WHERE {placeholders}",
+            params,
+        ).fetchall()
+        for row in rows:
+            result[row[0]] = {
+                "bpm": row[1],
+                "energy": row[2],
+                "spectral_brightness": row[3],
+                "zcr": row[4],
+            }
+    return result
+
+
+def _cache_set_batch(
+    conn: sqlite3.Connection, records: list[tuple[str, float, dict]]
+) -> None:
+    """Batch cache write in a single transaction."""
+    if not records:
+        return
+    now = int(time.time())
+    conn.executemany(
+        """INSERT OR REPLACE INTO audio_features
+           (path, mtime, bpm, energy, spectral_brightness, zcr, analyzed_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        [
+            (
+                path,
+                mtime,
+                features.get("bpm"),
+                features.get("energy"),
+                features.get("spectral_brightness"),
+                features.get("zcr"),
+                now,
+            )
+            for path, mtime, features in records
+        ],
+    )
+    conn.commit()
+
+
+def analyze_track(file_path: str, duration: int = 120) -> dict:
     """
     Extract audio features from a single audio file using libROSA.
 
-    Analyzes the first 120 seconds of the track to keep runtime reasonable.
+    Analyzes the first `duration` seconds of the track to keep runtime reasonable.
 
     Returns:
         dict with keys: bpm, energy, spectral_brightness, zcr.
@@ -121,7 +177,7 @@ def analyze_track(file_path: str) -> dict:
     if not LIBROSA_AVAILABLE:
         return {}
     try:
-        y, sr = librosa.load(file_path, sr=None, mono=True, duration=120)
+        y, sr = librosa.load(file_path, sr=None, mono=True, duration=duration)
         if len(y) == 0:
             return {}
 
@@ -154,15 +210,16 @@ def analyze_track(file_path: str) -> dict:
 
 def _analyze_one(args: tuple) -> tuple:
     """Worker for ThreadPoolExecutor. Returns (idx, path, features)."""
-    idx, path = args
-    return idx, path, analyze_track(path)
+    idx, path, duration = args
+    return idx, path, analyze_track(path, duration=duration)
 
 
 def analyze_library(
     df: pd.DataFrame,
     db_path: str,
     enabled: bool = True,
-    workers: int = 4,
+    workers: int = 0,
+    duration: int = 120,
 ) -> pd.DataFrame:
     """
     Add Energy, SpectralBrightness, ZCR columns to the library DataFrame.
@@ -175,7 +232,8 @@ def analyze_library(
         df:       Library DataFrame with a 'Location' column.
         db_path:  Path to the SQLite audio cache.
         enabled:  If False, returns df unchanged (LIBROSA_ENABLED=false in config).
-        workers:  Parallel analysis threads (default 4).
+        workers:  Parallel analysis threads (default os.cpu_count() or 4).
+        duration: Seconds of audio to analyze per track (default 120).
 
     Returns:
         DataFrame with Energy, SpectralBrightness, ZCR columns added/filled.
@@ -183,20 +241,19 @@ def analyze_library(
     if not enabled:
         return df
 
-    if not LIBROSA_AVAILABLE:
-        logging.warning(
-            "librosa is not installed — audio feature extraction skipped. "
-            "Clustering will fall back to mood/genre. Install: pip install librosa"
-        )
-        return df
+    if workers <= 0:
+        workers = os.cpu_count() or 4
 
     db_path = str(Path(db_path).expanduser())
     try:
         conn = _init_db(db_path)
     except Exception as exc:
-        logging.warning("Audio cache DB init failed (%s) — skipping audio analysis.", exc)
+        logging.warning(
+            "Audio cache DB init failed (%s) — skipping audio analysis.", exc
+        )
         return df
 
+    # Try to load librosa; analyze_track will return {} if not available
     try:
         df = df.copy()
 
@@ -205,10 +262,8 @@ def analyze_library(
             if col not in df.columns:
                 df[col] = None
 
-        # Build work list
-        to_analyze: list = []
-        mtime_map: dict = {}
-        path_map: dict = {}
+        # Build work list — resolve paths and get mtimes first
+        candidates: list[tuple[int, str, float]] = []  # (idx, path, mtime)
 
         for idx, row in df.iterrows():
             raw_loc = row.get("Location") or ""
@@ -221,30 +276,36 @@ def analyze_library(
                 mtime = os.path.getmtime(path)
             except OSError:
                 continue
-            cached = _cache_get(conn, path, mtime)
-            if cached:
-                if cached.get("energy") is not None:
-                    df.at[idx, "Energy"] = cached["energy"]
-                if cached.get("spectral_brightness") is not None:
-                    df.at[idx, "SpectralBrightness"] = cached["spectral_brightness"]
-                if cached.get("zcr") is not None:
-                    df.at[idx, "ZCR"] = cached["zcr"]
-                # Backfill BPM from audio cache if mutagen missed it
-                if cached.get("bpm") and (
-                    "BPM" not in df.columns
-                    or pd.isnull(df.at[idx, "BPM"])
-                    or df.at[idx, "BPM"] == 0
-                ):
-                    df.at[idx, "BPM"] = cached["bpm"]
+            candidates.append((idx, path, mtime))
+
+        # Batch cache lookup — single SQL query instead of N individual queries
+        cache_map = _cache_get_batch(
+            conn, [(path, mtime) for _, path, mtime in candidates]
+        )
+
+        to_analyze: list = []
+        mtime_map: dict = {}
+
+        for idx, path, mtime in candidates:
+            cached = cache_map.get(path)
+            if cached is not None:
+                for col in ("Energy", "SpectralBrightness", "ZCR"):
+                    v = cached.get(col.lower() if col != "ZCR" else "zcr")
+                    # Map cache keys to DataFrame columns
+                    cache_key = {
+                        "Energy": "energy",
+                        "SpectralBrightness": "spectral_brightness",
+                        "ZCR": "zcr",
+                    }[col]
+                    v = cached.get(cache_key)
+                    if v is not None and df.at[idx, col] is None:
+                        df.at[idx, col] = v
             else:
-                to_analyze.append((idx, path))
+                to_analyze.append((idx, path, duration))
                 mtime_map[idx] = mtime
-                path_map[idx] = path
 
         if not to_analyze:
-            logging.info(
-                "Audio analysis: all %d tracks loaded from cache.", len(df)
-            )
+            logging.info("Audio analysis: all %d tracks loaded from cache.", len(df))
             return df
 
         logging.info(
@@ -255,54 +316,68 @@ def analyze_library(
 
         completed = 0
         failed = 0
-        with ThreadPoolExecutor(max_workers=workers) as executor:
+        cache_batch: list[tuple[str, float, dict]] = []
+
+        # Use ProcessPoolExecutor for CPU-bound librosa work (bypasses GIL)
+        with ProcessPoolExecutor(max_workers=workers) as executor:
             futures = {executor.submit(_analyze_one, t): t for t in to_analyze}
-            for future in as_completed(futures):
+            for future in tqdm(
+                as_completed(futures),
+                total=len(futures),
+                desc="Analyzing audio",
+                unit="track",
+                disable=len(to_analyze) < 10,
+            ):
                 try:
                     idx, path, features = future.result()
+                    if features:
+                        cache_batch.append((path, mtime_map[idx], features))
+                        for col, value in features.items():
+                            df.at[idx, col] = value
+                    completed += 1
                 except Exception as exc:
                     logging.warning("Audio analysis worker error: %s", exc)
                     failed += 1
-                    continue
-                if features:
-                    if features.get("energy") is not None:
-                        df.at[idx, "Energy"] = features["energy"]
-                    if features.get("spectral_brightness") is not None:
-                        df.at[idx, "SpectralBrightness"] = features["spectral_brightness"]
-                    if features.get("zcr") is not None:
-                        df.at[idx, "ZCR"] = features["zcr"]
-                    if features.get("bpm") and (
-                        "BPM" not in df.columns
-                        or pd.isnull(df.at[idx, "BPM"])
-                        or df.at[idx, "BPM"] == 0
-                    ):
-                        df.at[idx, "BPM"] = features["bpm"]
-                    try:
-                        _cache_set(conn, path, mtime_map[idx], features)
-                    except Exception as exc:
-                        logging.warning("Audio cache write failed for %s: %s", path, exc)
-                else:
-                    failed += 1
-                completed += 1
-                if completed % 100 == 0:
-                    logging.info(
-                        "Audio analysis: %d/%d complete.", completed, len(to_analyze)
-                    )
+
+        # Batch write all results to cache in one transaction
+        _cache_set_batch(conn, cache_batch)
 
     finally:
         conn.close()
+
     energy_count = df["Energy"].notna().sum() if "Energy" in df.columns else 0
-    succeeded = len(to_analyze) - failed
-    if failed:
-        logging.warning(
-            "Audio analysis: %d/%d tracks succeeded, %d failed (unreadable format "
-            "or codec missing — those tracks will use mood/genre clustering instead).",
-            succeeded, len(to_analyze), failed,
-        )
-    else:
+    succeeded = completed - failed
+    if LIBROSA_AVAILABLE and not to_analyze:
         logging.info(
             "Audio analysis complete: %d tracks analysed, Energy populated for "
             "%d / %d tracks total.",
-            succeeded, energy_count, len(df),
+            succeeded,
+            energy_count,
+            len(df),
+        )
+    elif not LIBROSA_AVAILABLE and failed == 0:
+        # All uncached files failed because librosa unavailable — track counts still correct
+        logging.warning(
+            "Audio analysis complete: %d tracks analysed (librosa unavailable)."
+            " Energy populated for %d / %d tracks. Install librosa to enable.",
+            completed,
+            energy_count,
+            len(df),
+        )
+    elif LIBROSA_AVAILABLE and failed > 0:
+        logging.warning(
+            "Audio analysis: %d/%d tracks succeeded, %d failed (unreadable format "
+            "or codec missing — those tracks will use mood/genre clustering instead).",
+            completed - failed,
+            len(to_analyze),
+            failed,
+        )
+    elif LIBROSA_AVAILABLE and completed == 0:
+        # to_analyze was empty
+        logging.info("Audio analysis: no new files to process.")
+    else:
+        logging.warning(
+            "Audio analysis skipped (librosa unavailable, %d uncached tracks).",
+            len(to_analyze),
         )
     return df

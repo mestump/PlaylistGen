@@ -9,7 +9,6 @@ mutagen's easy-interface.
 
 import logging
 from pathlib import Path
-from typing import Optional
 from urllib.parse import unquote
 
 import pandas as pd
@@ -151,21 +150,20 @@ def enrich_dataframe(df: pd.DataFrame, enabled: bool = True) -> pd.DataFrame:
         "Enriching %d tracks with embedded audio tags...", len(rows_to_enrich)
     )
 
+    def _is_missing(val) -> bool:
+        """Check if a DataFrame cell value is effectively empty."""
+        if val is None:
+            return True
+        try:
+            return pd.isna(val)
+        except (TypeError, ValueError):
+            return str(val).strip().lower() in ("", "none", "nan")
+
     tag_failures = 0
     for idx, row in rows_to_enrich.iterrows():
         tags = read_audio_tags(str(row["Location"]))
         if not any(tags.values()):
             tag_failures += 1
-
-        # Only fill genuinely missing values (NaN / None / empty string)
-        def _is_missing(val) -> bool:
-            if val is None:
-                return True
-            try:
-                import math
-                return math.isnan(float(val))
-            except (TypeError, ValueError):
-                return str(val).strip().lower() in ("", "none", "nan")
 
         if tags["year"] and _is_missing(df.at[idx, "Year"]):
             df.at[idx, "Year"] = tags["year"]

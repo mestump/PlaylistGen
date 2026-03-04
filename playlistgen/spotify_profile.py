@@ -141,7 +141,7 @@ def build_profile(
         "year_scores": {str(y): c for y, c in sorted(year_scores.items())},
         "track_play_counts": dict(track_play_counts),
         "track_skip_counts": dict(track_skip_counts),
-        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+        "generated_at": datetime.datetime.now(datetime.UTC).isoformat() + "Z",
     }
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
