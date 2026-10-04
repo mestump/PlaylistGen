@@ -34,6 +34,9 @@ def _autodetect_ipod_itdb() -> Path | None:
 def cmd_ingest(args) -> int:
     con = dbmod.connect(args.db)
     try:
+        if getattr(args, "force", False):
+            con.execute("DELETE FROM meta WHERE key LIKE 'ingest:%:stamp'")
+            con.commit()
         results = []
         want = args.sources
         if "files" in want:
@@ -94,6 +97,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--strawberry-db", default=str(STRAWBERRY_DB))
     p.add_argument("--ipod-itdb", default=None)
     p.add_argument("--spotify-glob", nargs="*", default=[])
+    p.add_argument("--force", action="store_true", help="re-ingest even if the source stamp is unchanged")
     p.set_defaults(func=cmd_ingest)
 
     s = sub.add_parser("status")

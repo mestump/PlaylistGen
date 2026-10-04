@@ -95,25 +95,31 @@ def ingest_ipod(con: sqlite3.Connection, itdb_path: str | Path) -> dict:
         return {"source": "ipod", "skipped": "unchanged"}
 
     tracks = parse_itdb(itdb_path)
-    n = plays = skips = 0
-    skiplte = 0
+    acc: dict[int, list[int]] = {}
+    n = 0
     for t in tracks:
         tid = upsert_track(con, t["artist"], t["title"])
-        if t["plays"] or t["skips"]:
-            upsert_counts(con, tid, "ipod", t["plays"], t["skips"], None)
-        plays += t["plays"]
-        skips += t["skips"]
-        if t["skips"] <= t["plays"]:
-            skiplte += 1
+        a = acc.setdefault(tid, [0, 0])
+        a[0] += t["plays"]
+        a[1] += t["skips"]
         n += 1
+    plays = skips = 0
+    skiplte = 0
+    for tid, (p, s) in acc.items():
+        if p or s:
+            upsert_counts(con, tid, "ipod", p, s, None)
+        plays += p
+        skips += s
+        if s <= p:
+            skiplte += 1
     set_meta(con, key, stamp)
     con.commit()
     return {
         "source": "ipod",
-        "tracks": n,
-        "unidentified": len(tracks) and None,
+        "records": n,
+        "tracks": len(acc),
         "plays": plays,
         "skips": skips,
-        "skips_le_plays_pct": round(100 * skiplte / max(n, 1), 1),
+        "skips_le_plays_pct": round(100 * skiplte / max(len(acc), 1), 1),
         "stamp": stamp,
     }

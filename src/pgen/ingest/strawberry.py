@@ -28,7 +28,8 @@ def ingest_strawberry(con: sqlite3.Connection, sb_path: str | Path | None = None
     _attach(main, str(sb_path))
     rows = main.execute(
         "SELECT artist, title, album, year, playcount, skipcount, lastplayed "
-        "FROM sb.songs WHERE artist IS NOT NULL AND title IS NOT NULL"
+        "FROM sb.songs WHERE artist IS NOT NULL AND TRIM(artist)<>'' "
+        "AND title IS NOT NULL AND TRIM(title)<>''"
     ).fetchall()
     n = plays = skips = 0
     for r in rows:
