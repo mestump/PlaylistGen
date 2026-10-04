@@ -119,9 +119,11 @@ def run(db_path: str, limit: int | None, rebuild: bool, threads: int, mem_limit:
                   SELECT tid, spotify_id, popularity FROM new_matches
                 ) GROUP BY tid, spotify_id
             """).df()
-            merged.to_parquet(CACHE)
+            d.register("merged_matches", merged)
+            d.sql(f"COPY merged_matches TO '{CACHE}' (FORMAT PARQUET, COMPRESSION zstd)")
         else:
-            matches.to_parquet(CACHE)
+            d.register("matches_df", matches)
+            d.sql(f"COPY matches_df TO '{CACHE}' (FORMAT PARQUET, COMPRESSION zstd)")
     else:
         matches = d.sql(f"SELECT tid, any_value(spotify_id) spotify_id, max(popularity) popularity FROM read_parquet('{CACHE}') GROUP BY tid, spotify_id").df()
         n_matched = matches["tid"].nunique()
