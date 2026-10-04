@@ -44,11 +44,11 @@ def cmd_ingest(args) -> int:
         if "strawberry" in want:
             results.append(ingest_strawberry(con, args.strawberry_db))
         if "ipod" in want:
-            itdb = Path(args.ipod_itdb) if args.ipod_itdb else _autodetect_ipod_itdb()
-            if not itdb:
-                print("no iPod iTunesDB found (plug device or pass --ipod-itdb)", file=sys.stderr)
+            sb = Path(args.ipod_sb_db) if getattr(args, "ipod_sb_db", None) else Path(args.strawberry_db)
+            if not sb.exists():
+                print(f"strawberry db not found: {sb}", file=sys.stderr)
                 return 2
-            results.append(ingest_ipod(con, itdb))
+            results.append(ingest_ipod(con, sb))
         if "spotify-history" in want:
             paths: list[str | Path] = [Path(p) for p in args.spotify_glob]
             if not paths:
@@ -95,7 +95,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("sources", nargs="+", choices=["files", "strawberry", "ipod", "spotify-history", "all"])
     p.add_argument("--library", default=DEFAULT_LIBRARY)
     p.add_argument("--strawberry-db", default=str(STRAWBERRY_DB))
-    p.add_argument("--ipod-itdb", default=None)
+    p.add_argument("--ipod-sb-db", default=None, help="override strawberry db for ipod counts")
     p.add_argument("--spotify-glob", nargs="*", default=[])
     p.add_argument("--force", action="store_true", help="re-ingest even if the source stamp is unchanged")
     p.set_defaults(func=cmd_ingest)

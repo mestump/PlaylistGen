@@ -1,18 +1,20 @@
-"""iPod source: parse iTunesDB (mhit records) directly. Device files are authoritative;
-Strawberry's device cache has been observed stale (lastseen=0).
+"""iPod source.
 
-Field offsets calibrated empirically 2026-10-04 against this device's DB (14,128 mhits)
-with strawberry device_1_songs as reference:
-  +0x30 playcount  (72% monotone-match vs cache on pc>=10 rows; +0x2C only 7%)
-  +0x2C skipcount  (provisional: 98.7% nonzero, median 7, sum 0.6x plays - plausible; unvalidated against cache)
-  +0x18 time added (100% tslike) - NOT lastplayed; iPod lastplayed deferred (Play Counts mhdp, M2)
-mhod strings: utf-16-le at +0x18..+totlen; type 1=title 2=path 4=artist; path sep ':'.
+Counts: Strawberry's device_1_songs table (libgpod-grade, written at last sync) is the
+per-track source of truth for play/skip counts -- ~5,965 plays on this device. The raw
+iTunesDB parser below is kept for identity/path use and calibration notes; its heuristic
+count offsets (mhit+0x30 etc.) over-counted ~36x and are NOT used for totals.
+Open question (TODO M3+): 'Play Counts' file = 14,128 x 28B entries (mhdp hdr: entry
+size 28, count == mhit count); entry-order convention unresolved; would give the
+post-sync delta. iTunesDB mhit count offsets +0x5C/+0x60 also unresolved (eq ~52%).
+
+mhod strings: utf-16-le; type 1=title 2=path 4=artist; path sep ':'.
 """
 
 from __future__ import annotations
 
-import struct
 import sqlite3
+import struct
 from pathlib import Path
 
 from ..db import get_meta, set_meta
@@ -22,7 +24,6 @@ U32 = struct.Struct("<I")
 
 MHSD_TRACK = 1
 MHOD_TITLE, MHOD_PATH, MHOD_ARTIST = 1, 2, 4
-PLAYS_OFF, SKIPS_OFF = 0x30, 0x2C
 
 
 def _u32(buf: bytes, off: int) -> int:
@@ -46,6 +47,7 @@ def _mhod_str(buf: bytes, rec: int, tot: int, want: int) -> str | None:
 
 
 def parse_itdb(path: str | Path) -> list[dict]:
+    """Parse mhit identity (title/artist/path). Counts NOT included -- see module docstring."""
     data = Path(path).read_bytes()
     j = data.find(b"mhsd")
     while j >= 0 and _u32(data, j + 0x0C) != MHSD_TRACK:
@@ -70,8 +72,6 @@ def parse_itdb(path: str | Path) -> list[dict]:
                     {
                         "title": title,
                         "artist": artist,
-                        "plays": _u32(data, p + PLAYS_OFF),
-                        "skips": _u32(data, p + SKIPS_OFF),
                         "device_path": _mhod_str(data, p, tot, MHOD_PATH),
                     }
                 )
@@ -85,41 +85,42 @@ def parse_itdb(path: str | Path) -> list[dict]:
     return out
 
 
-def ingest_ipod(con: sqlite3.Connection, itdb_path: str | Path) -> dict:
-    itdb_path = Path(itdb_path)
-    if not itdb_path.exists():
-        raise FileNotFoundError(f"iTunesDB not found: {itdb_path}")
-    stamp = f"ipod:{itdb_path}:{int(itdb_path.stat().st_mtime)}"
+def ingest_ipod(con: sqlite3.Connection, sb_db: str | Path) -> dict:
+    """iPod play/skip counts from strawberry's device cache (same device, libgpod-parsed)."""
+    sb_db = Path(sb_db)
+    if not sb_db.exists():
+        raise FileNotFoundError(f"strawberry db not found: {sb_db}")
+    stamp = f"ipod-cache:{int(sb_db.stat().st_mtime)}"
     key = "ingest:ipod:stamp"
     if get_meta(con, key) == stamp:
         return {"source": "ipod", "skipped": "unchanged"}
 
-    tracks = parse_itdb(itdb_path)
+    con.execute(f"ATTACH DATABASE '{sb_db}' AS sbdev")
+    rows = con.execute(
+        "SELECT artist, title, playcount, skipcount, lastplayed FROM sbdev.device_1_songs "
+        "WHERE artist IS NOT NULL AND TRIM(artist)<>'' AND title IS NOT NULL AND TRIM(title)<>''"
+    ).fetchall()
+    con.execute("DETACH DATABASE sbdev")
+
     acc: dict[int, list[int]] = {}
-    n = 0
-    for t in tracks:
-        tid = upsert_track(con, t["artist"], t["title"])
+    for artist, title, pc, sk, _lp in rows:
+        tid = upsert_track(con, artist, title)
         a = acc.setdefault(tid, [0, 0])
-        a[0] += t["plays"]
-        a[1] += t["skips"]
-        n += 1
+        a[0] += int(pc or 0)
+        a[1] += int(sk or 0)
     plays = skips = 0
-    skiplte = 0
     for tid, (p, s) in acc.items():
         if p or s:
             upsert_counts(con, tid, "ipod", p, s, None)
         plays += p
         skips += s
-        if s <= p:
-            skiplte += 1
     set_meta(con, key, stamp)
     con.commit()
     return {
         "source": "ipod",
-        "records": n,
+        "records": len(rows),
         "tracks": len(acc),
         "plays": plays,
         "skips": skips,
-        "skips_le_plays_pct": round(100 * skiplte / max(len(acc), 1), 1),
         "stamp": stamp,
     }

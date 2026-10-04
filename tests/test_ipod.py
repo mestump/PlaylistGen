@@ -54,8 +54,5 @@ def test_parse_minimal_itdb(tmp_path: Path):
     assert got[0] == {
         "title": "Peacebone",
         "artist": "Animal Collective",
-        "plays": 12,
-        "skips": 3,
         "device_path": ":iPod:x.y",
     }
-    assert got[1]["plays"] == 0 and got[1]["skips"] == 0
