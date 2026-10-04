@@ -141,10 +141,18 @@ def run(db_path: str, limit: int | None, rebuild: bool, threads: int, mem_limit:
 
     feats = d.sql(f"""
         SELECT f.track_id,
-               avg(f.tempo) tempo, avg(f.energy) energy, avg(f.danceability) danceability,
-               avg(f.valence) valence, avg(f.loudness) loudness,
-               mode(f.key) AS key_mode, mode(f.mode) AS mode_mode,
-               avg(f.time_signature) time_signature
+               avg(TRY_CAST(f.tempo AS DOUBLE)) tempo,
+               avg(TRY_CAST(f.energy AS DOUBLE)) energy,
+               avg(TRY_CAST(f.danceability AS DOUBLE)) danceability,
+               avg(TRY_CAST(f.valence AS DOUBLE)) valence,
+               avg(TRY_CAST(f.loudness AS DOUBLE)) loudness,
+               avg(TRY_CAST(f.speechiness AS DOUBLE)) speechiness,
+               avg(TRY_CAST(f.acousticness AS DOUBLE)) acousticness,
+               avg(TRY_CAST(f.instrumentalness AS DOUBLE)) instrumentalness,
+               avg(TRY_CAST(f.liveness AS DOUBLE)) liveness,
+               mode(TRY_CAST(f.key AS INTEGER)) AS key_mode,
+               mode(TRY_CAST(f.mode AS INTEGER)) AS mode_mode,
+               avg(TRY_CAST(f.time_signature AS DOUBLE)) time_signature
         FROM read_parquet('{PD}/track_audio_features.parquet', union_by_name=true) f
         JOIN best_ids b ON b.spotify_id = f.track_id
         GROUP BY f.track_id
@@ -164,6 +172,10 @@ def run(db_path: str, limit: int | None, rebuild: bool, threads: int, mem_limit:
             "danceability": round(float(fr.danceability), 3) if fr.danceability is not None else None,
             "valence": round(float(fr.valence), 3) if fr.valence is not None else None,
             "loudness": round(float(fr.loudness), 2) if fr.loudness is not None else None,
+            "speechiness": round(float(fr.speechiness), 3) if fr.speechiness is not None else None,
+            "acousticness": round(float(fr.acousticness), 3) if fr.acousticness is not None else None,
+            "instrumentalness": round(float(fr.instrumentalness), 3) if fr.instrumentalness is not None else None,
+            "liveness": round(float(fr.liveness), 3) if fr.liveness is not None else None,
             "key": int(fr.key_mode) if fr.key_mode is not None else None,
             "mode": int(fr.mode_mode) if fr.mode_mode is not None else None,
             "time_signature": float(fr.time_signature) if fr.time_signature is not None else None,

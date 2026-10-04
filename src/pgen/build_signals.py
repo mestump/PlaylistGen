@@ -32,7 +32,7 @@ def rebuild(con: sqlite3.Connection) -> dict:
           skips INTEGER, skip_ratio REAL,
           last_played_ts INTEGER, days_since_play REAL,
           artist_key TEXT, artist_plays_365d REAL, artist_rank INTEGER,
-          hour_peak INTEGER
+          hour_peak INTEGER, is_spoken INTEGER DEFAULT 0
         );
         """
     )
@@ -97,6 +97,15 @@ def rebuild(con: sqlite3.Connection) -> dict:
             FROM play_events WHERE track_id=track_signal.track_id GROUP BY hour
             ORDER BY n DESC LIMIT 1)
         ) WHERE hour_peak IS NULL
+        """
+    )
+    # spoken-word flag: anything under an Audiobooks/ dir never competes with music
+    con.execute(
+        """
+        UPDATE track_signal SET is_spoken=(
+          SELECT COUNT(*) FROM track_paths tp WHERE tp.track_id=track_signal.track_id
+            AND upper(tp.path) LIKE '%AUDIOBOOKS/%'
+        )
         """
     )
     con.commit()

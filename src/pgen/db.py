@@ -60,9 +60,10 @@ CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
 def connect(path: str | Path) -> sqlite3.Connection:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(str(p))
+    con = sqlite3.connect(str(p), timeout=60)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA journal_mode=WAL")
+    con.execute("PRAGMA busy_timeout=60000")
     con.execute("PRAGMA foreign_keys=ON")
     con.executescript(SCHEMA)
     return con
