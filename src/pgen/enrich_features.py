@@ -47,8 +47,9 @@ def _norm_sql(col: str) -> str:
 def run(db_path: str, limit: int | None, rebuild: bool, threads: int, mem_limit: str) -> int:
     import duckdb
 
-    con = sqlite3.connect(db_path)
-    con.row_factory = sqlite3.Row
+    from .db import connect as db_connect
+
+    con = db_connect(db_path)
     rows = con.execute(
         "SELECT id, artist, title FROM tracks WHERE artist IS NOT NULL AND TRIM(artist)<>'' "
         "AND title IS NOT NULL AND TRIM(title)<>''"
