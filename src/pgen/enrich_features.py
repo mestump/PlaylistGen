@@ -78,12 +78,17 @@ def run(db_path: str, limit: int | None, rebuild: bool, threads: int, mem_limit:
     d.execute(f"PRAGMA temp_directory='{spill}'")
 
     # ---- stage A: identity match (cached) ------------------------------------
+    # sidecar records every key the full scan has attempted; reruns only rescan
+    # when NEW keys appear (unmatched keys are recorded too, else they retrigger).
+    KEYS_CACHE = CACHE.with_suffix(".keys.parquet")
     need_match = True
-    if CACHE.exists() and not rebuild:
+    if CACHE.exists() and KEYS_CACHE.exists() and not rebuild:
         try:
-            cached = d.sql(f"SELECT DISTINCT tid FROM read_parquet('{CACHE}')").df()
-            need = {tid for _, tid in keyed.items()} - set(cached["tid"])
+            done = {(a, b) for a, b in d.sql(f"SELECT artist, title FROM read_parquet('{KEYS_CACHE}')").fetchall()}
+            need = set(keyed) - done
             need_match = len(need) > 0
+            if not need_match:
+                print(f"keys cached: {len(done):,} (scan skipped)", flush=True)
         except Exception:
             need_match = True
 
@@ -124,6 +129,15 @@ def run(db_path: str, limit: int | None, rebuild: bool, threads: int, mem_limit:
         else:
             d.register("matches_df", matches)
             d.sql(f"COPY matches_df TO '{CACHE}' (FORMAT PARQUET, COMPRESSION zstd)")
+        # record attempted keys so unmatched keys don't retrigger the scan
+        d.execute("CREATE OR REPLACE TABLE done_keys(artist VARCHAR, title VARCHAR)")
+        d.executemany("INSERT INTO done_keys VALUES(?,?)", list(keyed))
+        if KEYS_CACHE.exists():
+            d.execute(f"INSERT INTO done_keys SELECT artist, title FROM read_parquet('{KEYS_CACHE}')")
+        d.execute(
+            f"COPY (SELECT DISTINCT artist, title FROM done_keys) TO '{KEYS_CACHE}' "
+            "(FORMAT PARQUET, COMPRESSION zstd)"
+        )
     else:
         matches = d.sql(f"SELECT tid, any_value(spotify_id) spotify_id, max(popularity) popularity FROM read_parquet('{CACHE}') GROUP BY tid, spotify_id").df()
         n_matched = matches["tid"].nunique()
