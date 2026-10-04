@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "playlistgen-v2"
+version = "2.0.0a0"
+description = "Local-library playlist generation from real listening history (Spotify For You quality, offline)."
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "mutagen>=1.47",
+    "duckdb>=1.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+pgen = "pgen.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
