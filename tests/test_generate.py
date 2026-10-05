@@ -50,6 +50,7 @@ def db(tmp_path: Path):
             con.execute("INSERT INTO track_genre VALUES(?,?)", (id_, g))
     # affinity: A<->B strong, C isolated
     con.execute("CREATE TABLE IF NOT EXISTS track_affinity(a INTEGER, b INTEGER, co INTEGER, pmi REAL)")
+    con.execute("CREATE TABLE IF NOT EXISTS track_genre(track_id INTEGER, genre TEXT, PRIMARY KEY(track_id,genre))")
     a1 = con.execute("SELECT id FROM tracks WHERE title_canon='a0'").fetchone()[0]
     a2 = con.execute("SELECT id FROM tracks WHERE title_canon='a1'").fetchone()[0]
     b0 = con.execute("SELECT id FROM tracks WHERE title_canon='b0'").fetchone()[0]
