@@ -45,7 +45,11 @@ def db(tmp_path: Path):
             "INSERT INTO track_signal(track_id,plays_total,plays_events,is_spoken) VALUES(?,?,?,?)",
             (id_, 10 + id_, 0, 1 if key == "S" else 0),
         )
-    for k, g in [("A", "post-hardcore"), ("B", "post-hardcore"), ("C", "musicals")]:
+    con.execute(
+        "CREATE TABLE IF NOT EXISTS track_genre("
+        "track_id INTEGER NOT NULL, genre TEXT NOT NULL, PRIMARY KEY(track_id,genre))"
+    )
+    for k, g in [("a", "post-hardcore"), ("b", "post-hardcore"), ("c", "musicals")]:
         for id_, in con.execute("SELECT id FROM tracks WHERE artist_canon=?", (k,)):
             con.execute("INSERT INTO track_genre VALUES(?,?)", (id_, g))
     # affinity: A<->B strong, C isolated
