@@ -98,7 +98,7 @@ def affinity(con: sqlite3.Connection) -> dict:
           FROM scored
         )
         SELECT MIN(a) AS a, MAX(b) AS b,
-               ANY_VALUE(c) AS c, ANY_VALUE(pmi) AS pmi
+               MAX(c) AS c, MAX(pmi) AS pmi
         FROM ranked WHERE rk<={TOPK}
         GROUP BY CASE WHEN a<b THEN a*100000000+b ELSE b*100000000+a END
         """
