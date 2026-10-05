@@ -66,6 +66,15 @@ def cmd_ingest(args) -> int:
         con.close()
 
 
+def cmd_make(args) -> int:
+    from . import generate
+
+    con = dbmod.connect(args.db)
+    res = generate.generate(con, args.n, args.seed)
+    print(json.dumps(res, indent=2))
+    return 0 if res["picked"] else 1
+
+
 def cmd_status(args) -> int:
     con = dbmod.connect(args.db)
     try:
@@ -102,6 +111,11 @@ def main(argv: list[str] | None = None) -> int:
 
     s = sub.add_parser("status")
     s.set_defaults(func=cmd_status)
+
+    g = sub.add_parser("make")
+    g.add_argument("-n", type=int, default=30)
+    g.add_argument("--seed", type=int, default=0)
+    g.set_defaults(func=cmd_make)
 
     args = ap.parse_args(argv)
     if "all" in getattr(args, "sources", []):
