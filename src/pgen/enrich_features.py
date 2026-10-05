@@ -177,24 +177,36 @@ def run(db_path: str, limit: int | None, rebuild: bool, threads: int, mem_limit:
     pop = dict(zip(best["tid"], best["popularity"]))
     fmap = {r.track_id: r for r in feats.itertuples(index=False)}
     written = 0
+    def _f(x, nd):
+        try:
+            return round(float(x), nd)
+        except (TypeError, ValueError):
+            return None
+
+    def _i(x):
+        try:
+            return int(x)
+        except (TypeError, ValueError):
+            return None
+
     for tid, spotify_id in zip(best["tid"], best["spotify_id"]):
         fr = fmap.get(spotify_id)
         if fr is None:
             continue
         scal = {
-            "tempo": round(float(fr.tempo), 2) if fr.tempo is not None else None,
-            "energy": round(float(fr.energy), 3) if fr.energy is not None else None,
-            "danceability": round(float(fr.danceability), 3) if fr.danceability is not None else None,
-            "valence": round(float(fr.valence), 3) if fr.valence is not None else None,
-            "loudness": round(float(fr.loudness), 2) if fr.loudness is not None else None,
-            "speechiness": round(float(fr.speechiness), 3) if fr.speechiness is not None else None,
-            "acousticness": round(float(fr.acousticness), 3) if fr.acousticness is not None else None,
-            "instrumentalness": round(float(fr.instrumentalness), 3) if fr.instrumentalness is not None else None,
-            "liveness": round(float(fr.liveness), 3) if fr.liveness is not None else None,
-            "key": int(fr.key_mode) if fr.key_mode is not None else None,
-            "mode": int(fr.mode_mode) if fr.mode_mode is not None else None,
-            "time_signature": float(fr.time_signature) if fr.time_signature is not None else None,
-            "popularity": int(pop[tid]) if pop.get(tid) is not None else None,
+            "tempo": _f(fr.tempo, 2),
+            "energy": _f(fr.energy, 3),
+            "danceability": _f(fr.danceability, 3),
+            "valence": _f(fr.valence, 3),
+            "loudness": _f(fr.loudness, 2),
+            "speechiness": _f(fr.speechiness, 3),
+            "acousticness": _f(fr.acousticness, 3),
+            "instrumentalness": _f(fr.instrumentalness, 3),
+            "liveness": _f(fr.liveness, 3),
+            "key": _i(fr.key_mode),
+            "mode": _i(fr.mode_mode),
+            "time_signature": _f(fr.time_signature, 1),
+            "popularity": _i(pop.get(tid)),
         }
         con.execute(
             "INSERT INTO features(track_id,model,dim,vec,scalars,source) "
