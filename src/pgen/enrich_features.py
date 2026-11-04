@@ -15,11 +15,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sqlite3
+import sys
 from pathlib import Path
 
-PD = "/mnt/storage/spotify-data"
+PD = os.environ.get("PGEN_PARQUET_DIR", "") or "~/pgen-parquet"
 CACHE = Path.home() / "pgen-tmp/match-cache.parquet"
 
 _ACC = str.maketrans(
@@ -44,8 +46,13 @@ def _norm_sql(col: str) -> str:
     )
 
 
-def run(db_path: str, limit: int | None, rebuild: bool, threads: int, mem_limit: str) -> int:
+def run(db_path: str, limit: int | None, rebuild: bool, threads: int, mem_limit: str, parquet_dir: str | None = None) -> int:
     import duckdb
+
+    pd = Path(parquet_dir or PD).expanduser()
+    if not pd.exists():
+        print(f"parquet dir not found: {pd} (pass --parquet-dir or set PGEN_PARQUET_DIR)", file=sys.stderr)
+        return 2
 
     from .db import connect as db_connect
 
@@ -100,13 +107,13 @@ def run(db_path: str, limit: int | None, rebuild: bool, threads: int, mem_limit:
         matches = d.sql(f"""
         WITH t AS (
           SELECT rowid, id, popularity, {_norm_sql('name')} AS tn
-          FROM read_parquet('{PD}/tracks.parquet', union_by_name=true) WHERE name IS NOT NULL
+          FROM read_parquet('{pd}/tracks.parquet', union_by_name=true) WHERE name IS NOT NULL
         ),
         an AS (
           SELECT rowid, {_norm_sql('name')} AS an
-          FROM read_parquet('{PD}/artists.parquet', union_by_name=true) WHERE name IS NOT NULL
+          FROM read_parquet('{pd}/artists.parquet', union_by_name=true) WHERE name IS NOT NULL
         ),
-        ta AS (SELECT DISTINCT track_rowid, artist_rowid FROM read_parquet('{PD}/track_artists.parquet'))
+        ta AS (SELECT DISTINCT track_rowid, artist_rowid FROM read_parquet('{pd}/track_artists.parquet'))
         SELECT DISTINCT k.tid, t.id AS spotify_id, t.popularity
         FROM libk k
         JOIN t ON t.tn = k.title
@@ -168,7 +175,7 @@ def run(db_path: str, limit: int | None, rebuild: bool, threads: int, mem_limit:
                mode(TRY_CAST(f.key AS INTEGER)) AS key_mode,
                mode(TRY_CAST(f.mode AS INTEGER)) AS mode_mode,
                avg(TRY_CAST(f.time_signature AS DOUBLE)) time_signature
-        FROM read_parquet('{PD}/track_audio_features.parquet', union_by_name=true) f
+        FROM read_parquet('{pd}/track_audio_features.parquet', union_by_name=true) f
         JOIN best_ids b ON b.spotify_id = f.track_id
         GROUP BY f.track_id
     """).df()
@@ -227,12 +234,13 @@ def run(db_path: str, limit: int | None, rebuild: bool, threads: int, mem_limit:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="pgen-enrich-features")
     ap.add_argument("--db", default=str(Path.home() / ".local/share/pgen/v2.db"))
+    ap.add_argument("--parquet-dir", default=None)
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--rebuild", action="store_true")
     ap.add_argument("--threads", type=int, default=8)
     ap.add_argument("--mem-limit", default="3GB")
     args = ap.parse_args(argv)
-    return run(args.db, args.limit, args.rebuild, args.threads, args.mem_limit)
+    return run(args.db, args.limit, args.rebuild, args.threads, args.mem_limit, args.parquet_dir)
 
 
 if __name__ == "__main__":

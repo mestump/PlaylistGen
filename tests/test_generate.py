@@ -96,3 +96,43 @@ def test_artist_cap_and_runs_logged(db: sqlite3.Connection):
     assert all(v <= 3 for v in hist.values())
     row = db.execute("SELECT kind, m3u_path FROM runs ORDER BY id DESC LIMIT 1").fetchone()
     assert row["m3u_path"] == res["path"]
+
+
+def test_cold_start_no_signal_data(tmp_path: Path):
+    """Fresh store: tracks+paths only, no build ran, no listening history."""
+    con = sqlite3.connect(tmp_path / "cold.db")
+    con.row_factory = sqlite3.Row
+    con.executescript(SCHEMA)
+    for artist, n in [("A", 4), ("B", 4), ("C", 4)]:
+        for i in range(n):
+            id_ = con.execute(
+                "INSERT INTO tracks(artist_canon,title_canon,artist,title) VALUES(?,?,?,?)",
+                (artist.lower(), f"{artist.lower()}{i}", artist, f"{artist.lower()}{i}"),
+            ).lastrowid
+            p = tmp_path / f"{artist.lower()}{i}.flac"
+            p.write_bytes(b"x")
+            con.execute("INSERT INTO track_paths(track_id,path,source) VALUES(?,?,'test')", (id_, str(p)))
+    con.commit()
+    res = generate(con, n=6, seed=0)
+    rows = [ln for ln in Path(res["path"]).read_text().splitlines() if ln.startswith("#EXTINF")]
+    assert len(rows) == 6, f"cold start picked {len(rows)}"
+    hist = res["report"]["artist_hist"]
+    assert all(v <= 3 for v in hist.values())
+    con.close()
+
+
+def test_cold_start_scene_no_genres(tmp_path: Path):
+    """Scene mode on a store with no genre table rows exits cleanly, not with a crash."""
+    con = sqlite3.connect(tmp_path / "cold2.db")
+    con.row_factory = sqlite3.Row
+    con.executescript(SCHEMA)
+    id_ = con.execute(
+        "INSERT INTO tracks(artist_canon,title_canon,artist,title) VALUES('a','a0','A','a0')"
+    ).lastrowid
+    p = tmp_path / "a0.flac"
+    p.write_bytes(b"x")
+    con.execute("INSERT INTO track_paths(track_id,path,source) VALUES(?,?,'test')", (id_, str(p)))
+    con.commit()
+    res = generate(con, n=5, seed=0, scene="ambient")  # no genres -> empty pool allowed
+    assert "picked" in res
+    con.close()

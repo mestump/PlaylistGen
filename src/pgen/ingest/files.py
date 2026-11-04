@@ -8,7 +8,7 @@ from pathlib import Path
 from ..resolve import upsert_track
 
 AUDIO_EXTS = {".mp3", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".wma", ".wav", ".alac"}
-DEFAULT_LIBRARY = "/mnt/nas_media/Music"
+DEFAULT_LIBRARY = str(Path.home() / "Music")
 
 
 def _tags(path: Path) -> tuple[str | None, str | None, str | None, int | None]:

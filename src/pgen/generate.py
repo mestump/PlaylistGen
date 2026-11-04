@@ -102,6 +102,9 @@ def _jack(a: set[str], b: set[str]) -> float:
 
 
 def generate(con: sqlite3.Connection, n: int = N, seed: int = 0, scene: str | None = None) -> dict:
+    from .db import ensure_derived
+
+    ensure_derived(con)
     rng = random.Random(seed)
     spoken = {r["track_id"] for r in con.execute("SELECT track_id FROM track_signal WHERE is_spoken>0")}
 
@@ -119,8 +122,12 @@ def generate(con: sqlite3.Connection, n: int = N, seed: int = 0, scene: str | No
     seed_pool = sorted(weights, key=lambda t: -weights[t])
     scene_set: set[str] = set()
     if scene:
-        s = scene.lower()
-        scene_set = {g for g in {x for gs in genres.values() for x in gs} if s in g}
+        if "," in scene:
+            tokens = {t.strip().lower() for t in scene.split(",") if t.strip()}
+            scene_set = {g for g in {x for gs in genres.values() for x in gs} if g.lower() in tokens}
+        else:
+            s = scene.lower()
+            scene_set = {g for g in {x for gs in genres.values() for x in gs} if s in g}
         scene_tracks = [t for t, gs in ((t, genres.get(t) or set()) for t in weights) if gs & scene_set]
         seed_pool = sorted(scene_tracks, key=lambda t: -weights[t])
     seed_set = set(seed_pool[:SEEDS])
@@ -172,6 +179,18 @@ def generate(con: sqlite3.Connection, n: int = N, seed: int = 0, scene: str | No
         s *= 1.0 - SKIP_PENALTY * min(sr, 1.0)
         pool[t] = {"static": s, "seed": t in seed_set, "sc": sc, "aff": aff.get(t, {})}
         scal_pool[t] = sc
+
+    if not pool:
+        # Cold start: no listening history anywhere. Every pathed, non-spoken
+        # track is eligible; ranking falls to genre/feature coherence only.
+        for t in sorted(have_path):
+            if t in spoken:
+                continue
+            if scene_set and not (genres.get(t, set()) & scene_set):
+                continue
+            sc = _load_json(con, t) or {}
+            pool[t] = {"static": 1.0, "seed": False, "sc": sc, "aff": {}}
+            scal_pool[t] = sc
     mu, sd = _pool_stats(scal_pool)
     z = {t: _zvec(d["sc"], mu, sd) for t, d in pool.items()}
 
@@ -195,8 +214,8 @@ def generate(con: sqlite3.Connection, n: int = N, seed: int = 0, scene: str | No
             for t in pool
             if t not in picked
             and artist_count.get(artist_of[t], 0) < ARTIST_CAP
-            and not (pool[t]["seed"] and fam >= n_familiar)
-            and not (not pool[t]["seed"] and nov >= n - n_familiar)
+            and not (seed_set and pool[t]["seed"] and fam >= n_familiar)
+            and not (seed_set and not pool[t]["seed"] and nov >= n - n_familiar)
         ]
         if not ok:
             break
@@ -232,7 +251,8 @@ def generate(con: sqlite3.Connection, n: int = N, seed: int = 0, scene: str | No
 
     out = Path.home() / ".local/share/pgen/playlists"
     out.mkdir(parents=True, exist_ok=True)
-    path = out / f"daily-{time.strftime('%Y%m%d-%H%M%S')}.m3u"
+    slug = scene.lower().replace(",", "-").replace(" ", "-").strip("-")[:24] if scene else "all"
+    path = out / f"daily-{time.strftime('%Y%m%d-%H%M%S')}-s{seed}-{slug}.m3u"
     path.write_text("\n".join(lines) + "\n")
 
     # quality report

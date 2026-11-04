@@ -7,17 +7,23 @@ The tag vocabulary is noisy; consumers jaccard it, no taxonomy needed.
 from __future__ import annotations
 
 import argparse
+import os
 import sqlite3
+import sys
 import time
 from pathlib import Path
 
-PD = Path("/mnt/storage/spotify-data")
+PD = Path(os.environ.get("PGEN_PARQUET_DIR", "") or "~/pgen-parquet").expanduser()
 CACHE = Path.home() / "pgen-tmp/match-cache.parquet"
 
 
-def run(db_path: str) -> int:
+def run(db_path: str, parquet_dir: str | Path = PD) -> int:
     import duckdb
 
+    pd = Path(parquet_dir)
+    if not pd.exists():
+        print(f"parquet dir not found: {pd} (pass --parquet-dir)", file=sys.stderr)
+        return 2
     con = sqlite3.connect(db_path)
     con.execute("DROP TABLE IF EXISTS track_genre")
     con.execute(
@@ -29,9 +35,9 @@ def run(db_path: str) -> int:
     q = f"""
         SELECT m.tid AS tid, g.genre AS genre
         FROM read_parquet('{CACHE}') m
-        JOIN read_parquet('{PD}/tracks.parquet', union_by_name=true) t ON t.id = m.spotify_id
-        JOIN read_parquet('{PD}/track_artists.parquet', union_by_name=true) ta ON ta.track_rowid = t.rowid
-        JOIN read_parquet('{PD}/artist_genres.parquet', union_by_name=true) g ON g.artist_rowid = ta.artist_rowid
+        JOIN read_parquet('{pd}/tracks.parquet', union_by_name=true) t ON t.id = m.spotify_id
+        JOIN read_parquet('{pd}/track_artists.parquet', union_by_name=true) ta ON ta.track_rowid = t.rowid
+        JOIN read_parquet('{pd}/artist_genres.parquet', union_by_name=true) g ON g.artist_rowid = ta.artist_rowid
         WHERE g.genre IS NOT NULL AND trim(g.genre) <> ''
         GROUP BY m.tid, g.genre
     """
@@ -48,8 +54,9 @@ def run(db_path: str) -> int:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="pgen-ingest-genres")
     ap.add_argument("--db", default=str(Path.home() / ".local/share/pgen/v2.db"))
+    ap.add_argument("--parquet-dir", default=str(PD))
     args = ap.parse_args(argv)
-    return run(args.db)
+    return run(args.db, args.parquet_dir)
 
 
 if __name__ == "__main__":

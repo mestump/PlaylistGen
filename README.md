@@ -1,55 +1,94 @@
-# playlistgen-v2
+# pgen — local listening-history playlist generator
 
-Local-library playlist generation from real listening history. Greenfield successor to
-[mestump/PlaylistGen](https://github.com/mestump/PlaylistGen) (v1 evaluation: 2026-10-04, retired).
+`pgen` builds Daily-Mix-style playlists from **your** music library and **your**
+listening history, entirely on your machine. No accounts, no cloud, no API keys.
+Playlists are reproducible (seeded) and everything except the raw play events
+can be rebuilt from scratch.
 
-Design doc: `~/Downloads/playlistgen-v2-design.md` (mirrored in repo docs/ once finalized).
+```sh
+pip install git+https://github.com/mestump/PlaylistGen.git
+pgen ingest files --library ~/Music   # index your library (tags via mutagen)
+pgen build                            # materialize play signals + co-occurrence affinity
+pgen make                             # write ~/.local/share/pgen/playlists/daily-*.m3u
+```
 
-## Status: M0/M1 — ingest layer, real data
+Requires Python 3.11+. Runtime deps: `mutagen` and `duckdb` (installed
+automatically). `pgen --help` lists every subcommand.
 
-| M | scope | state |
+## How it works
+
+1. **Ingest** — index music files, optionally plus plays/skips from Strawberry's
+   database, an iPod's `iTunesDB`/`Play Counts` files, and Spotify "Extended
+   Streaming History" JSON exports. Sources are idempotent (stamped by mtime);
+   player databases are opened read-only, never written.
+2. **Build** — per-track play signals (recency windows, skip ratio, artist rank)
+   plus track–track co-occurrence affinity from listening sessions (30-minute
+   gap), PMI-weighted.
+3. **Make** — seeded affinity walk from your top tracks, blended with feature
+   centricity, an artist diversity cap, a skip penalty, and a coherence-chained
+   final order. Output is an `.m3u` with absolute paths plus a quality report.
+
+## Ingest sources
+
+| command | source | notes |
 |---|---|---|
-| M0 | package, CLI, schema, CI-able tests | done |
-| M1 | ingest: files / strawberry / ipod / spotify-history + identity resolution | done, validated on real sources |
-| M2 | features (parquet match-first + audio embeddings), signals materialized | next |
-| M3 | `pgen make daily` + explanations, seeded | |
-| M4 | all playlist types, feedback loop | |
-| M5 | polish, cron, docs | |
+| `pgen ingest files --library DIR` | music files | mp3/m4a/aac/flac/ogg/opus/wma/wav; falls back to `Artist - Title` filename parsing |
+| `pgen ingest strawberry` | Strawberry player DB | play/skip counters; default `~/.local/share/strawberry/strawberry/strawberry.db` |
+| `pgen ingest ipod` | iPod `iTunesDB` + `Play Counts` | autodetects mounted iPods under `/run/media`; device files are authoritative — never trust player-app device caches |
+| `pgen ingest spotify-history --spotify-glob '.../Streaming_History_Audio_*.json'` | Spotify Extended Streaming History | timestamped plays, the strongest signal |
+| `pgen status` | — | per-source event/count totals |
 
-## Install
+Any one source is enough; add more whenever. Re-ingest is safe and cheap.
+Without `--library`, `pgen ingest files` scans `~/Music`.
+
+## Optional: audio features and genres from a Spotify parquet dump
+
+If you have a parquet copy of the Spotify catalog (tables `tracks`,
+`track_artists`, `artist_genres`, `track_audio_features` — the public
+`spotify-data` dumps match), pgen can attach scalar audio features
+(tempo/energy/valence/...) and artist genres by matching normalized
+`(artist, title)`:
 
 ```sh
+pgen genres   --parquet-dir /path/to/parquet
+pgen features --parquet-dir /path/to/parquet
+```
+
+Set `PGEN_PARQUET_DIR` to make it sticky. Both steps are optional: `pgen make`
+uses whatever exists and degrades to genre/feature-less ranking otherwise. A
+fresh library with no listening history at all still produces a playlist
+(cold start: diversity-capped, coherence-ranked pick from pathed tracks).
+
+## Day-to-day
+
+```sh
+pgen make --seed 42              # same playlist every time
+pgen make -n 50                  # longer
+pgen make --scene jazz           # genre-substring filter
+pgen make --scene 'jazz,fusion'  # exact multi-genre match
+```
+
+Playlists land in `~/.local/share/pgen/playlists/`; the filename carries the
+seed and scene. The store is a single SQLite database (WAL) at
+`~/.local/share/pgen/v2.db` — delete it and re-ingest to start over. Nothing
+outside those two paths is touched.
+
+## Development
+
+```sh
+git clone https://github.com/mestump/PlaylistGen && cd PlaylistGen
 python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
+.venv/bin/pytest
 ```
 
-## Ingest
+## Version history
 
-```sh
-pgen ingest files                 # /mnt/nas_media/Music (canonical library)
-pgen ingest strawberry            # ~/.local/share/strawberry/.../strawberry.db (read-only)
-pgen ingest ipod                  # autodetects /run/media/*/*/iPod_Control/iTunes/iTunesDB
-pgen ingest spotify-history --spotify-glob ~/sync/Streaming_History_Audio_*.json
-pgen status
-```
+- **v1** (archived on the
+  [`v1-legacy`](https://github.com/mestump/PlaylistGen/tree/v1-legacy) branch):
+  iTunes-XML pipeline with optional Last.fm/AI enrichment. Retired.
+- **v2** (this): greenfield rewrite — local-first, event-store based, no
+  account or API key required for the core loop.
 
-All sources are idempotent (stamped by mtime). Sources:
+## License
 
-- **files** — walk library, tags via mutagen, `Artist - Title` filename fallback
-- **strawberry** — counters to `source_counts` (no fabricated events)
-- **ipod** — iTunesDB parsed directly; device files are authoritative, Strawberry's
-  device cache is stale by observation. Playcount offset `mhit+0x30` (monotone-validated);
-skipcount `+0x2C` provisional. See module docstring in `pgen/ingest/ipod.py`.
-- **spotify-history** — Extended Streaming History JSON (2012–2025 shards)
-
-## Store
-
-Single sqlite (WAL) at `~/.local/share/pgen/v2.db`. Append-only `play_events` +
-per-source `source_counts`; `tracks` keyed by `(artist_canon, title_canon)` — see
-`pgen/normalize.py`. Everything except events/counts is a rebuildable projection.
-
-## Notes
-
-- Player DBs are opened read-only; v2 never writes to them.
-- `/mnt/nas_media` is autofs — first access stalls while it mounts.
-- Spotify scalar features come from the local parquet dump (`/mnt/storage/spotify-data`,
-  38GB) via duckdb in M2 — match-first, local inference only for the residue.
+[MIT](LICENSE)

@@ -4,30 +4,28 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
 from . import db as dbmod
-from .ingest.files import DEFAULT_LIBRARY, ingest_directory
+from .ingest.files import ingest_directory
 from .ingest.ipod import ingest_ipod
 from .ingest.strawberry import DEFAULT_DB as STRAWBERRY_DB
 from .ingest.strawberry import ingest_strawberry
 from .ingest.spotify_history import ingest_spotify_history
 
 DEFAULT_DB_PATH = Path.home() / ".local/share/pgen/v2.db"
-IPOD_ITDB = Path.home() / "run"  # placeholder; resolved via --ipod-itdb or autodetect
+DEFAULT_LIBRARY = Path.home() / "Music"
+PARQUET_DIR_DEFAULT = os.environ.get("PGEN_PARQUET_DIR", "")
 
 
 def _autodetect_ipod_itdb() -> Path | None:
     base = Path("/run/media")
     if not base.exists():
         return None
-    for user_dir in sorted(base.glob("*/")):
-        for name in ("MICHAEL_S I", "IPOD", "IPOD*"):
-            for hit in user_dir.glob(name):
-                cand = hit / "iPod_Control/iTunes/iTunesDB"
-                if cand.exists():
-                    return cand
+    for itdb in sorted(base.glob("*/*/iPod_Control/iTunes/iTunesDB")):
+        return itdb
     return None
 
 
@@ -70,9 +68,43 @@ def cmd_make(args) -> int:
     from . import generate
 
     con = dbmod.connect(args.db)
-    res = generate.generate(con, args.n, args.seed)
+    res = generate.generate(con, args.n, args.seed, getattr(args, "scene", None))
     print(json.dumps(res, indent=2))
     return 0 if res["picked"] else 1
+
+
+def cmd_build(args) -> int:
+    from . import build_affinity, build_signals
+
+    con = dbmod.connect(args.db)
+    try:
+        stats = build_signals.rebuild(con)
+        print("signals:", stats)
+        if not args.skip_affinity:
+            n_sess = build_affinity.sessionize(con)
+            aff = build_affinity.affinity(con)
+            print({"sessions": n_sess, **aff})
+        con.commit()
+        return 0
+    finally:
+        con.close()
+
+
+def cmd_genres(args) -> int:
+    from . import ingest_genres
+
+    if not args.parquet_dir:
+        print("no parquet dir: pass --parquet-dir or set PGEN_PARQUET_DIR", file=sys.stderr)
+        return 2
+    return ingest_genres.run(args.db, args.parquet_dir)
+
+
+def cmd_features(args) -> int:
+    from . import enrich_features
+
+    return enrich_features.run(
+        args.db, args.limit, args.rebuild, args.threads, args.mem_limit, args.parquet_dir or None
+    )
 
 
 def cmd_status(args) -> int:
@@ -115,7 +147,24 @@ def main(argv: list[str] | None = None) -> int:
     g = sub.add_parser("make")
     g.add_argument("-n", type=int, default=30)
     g.add_argument("--seed", type=int, default=0)
+    g.add_argument("--scene", default=None, help="genre token(s), comma-separated for exact multi-genre match")
     g.set_defaults(func=cmd_make)
+
+    b = sub.add_parser("build", help="materialize track signals (+ optional co-occurrence affinity) from ingested data")
+    b.add_argument("--skip-affinity", action="store_true")
+    b.set_defaults(func=cmd_build)
+
+    gg = sub.add_parser("genres", help="import Spotify artist genres from a parquet dump (optional)")
+    gg.add_argument("--parquet-dir", default=PARQUET_DIR_DEFAULT or None)
+    gg.set_defaults(func=cmd_genres)
+
+    ft = sub.add_parser("features", help="import scalar audio features from a spotify-style parquet dump (optional)")
+    ft.add_argument("--parquet-dir", default=PARQUET_DIR_DEFAULT or None)
+    ft.add_argument("--limit", type=int, default=None)
+    ft.add_argument("--rebuild", action="store_true")
+    ft.add_argument("--threads", type=int, default=8)
+    ft.add_argument("--mem-limit", default="3GB")
+    ft.set_defaults(func=cmd_features)
 
     args = ap.parse_args(argv)
     if "all" in getattr(args, "sources", []):

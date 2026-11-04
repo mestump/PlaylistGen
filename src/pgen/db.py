@@ -56,6 +56,38 @@ CREATE TABLE IF NOT EXISTS runs(
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
 """
 
+# Derived / rebuildable projections (materialized by pgen build / pgen genres).
+# Declared here so `pgen make` works on a fresh store before any build ran, and
+# so the builders' DROP+CREATE cycles start from a known shape.
+DERIVED_SCHEMA = """
+CREATE TABLE IF NOT EXISTS track_signal(
+  track_id INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
+  plays_90d REAL, plays_365d REAL, plays_events INTEGER,
+  plays_counters INTEGER, plays_total REAL,
+  skips INTEGER, skip_ratio REAL,
+  last_played_ts INTEGER, days_since_play REAL,
+  artist_key TEXT, artist_plays_365d REAL, artist_rank INTEGER,
+  hour_peak INTEGER, is_spoken INTEGER DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS listen_session(
+  session_id INTEGER PRIMARY KEY, started INTEGER, n_tracks INTEGER
+);
+CREATE TABLE IF NOT EXISTS track_affinity(
+  a INTEGER, b INTEGER, co INTEGER, pmi REAL
+);
+CREATE INDEX IF NOT EXISTS aff_a ON track_affinity(a);
+CREATE INDEX IF NOT EXISTS aff_b ON track_affinity(b);
+CREATE TABLE IF NOT EXISTS track_genre(
+  track_id INTEGER NOT NULL, genre TEXT NOT NULL, PRIMARY KEY(track_id,genre)
+);
+CREATE INDEX IF NOT EXISTS tg_track ON track_genre(track_id);
+"""
+
+
+def ensure_derived(con: sqlite3.Connection) -> None:
+    con.executescript(DERIVED_SCHEMA)
+    con.commit()
+
 
 def connect(path: str | Path) -> sqlite3.Connection:
     p = Path(path)
