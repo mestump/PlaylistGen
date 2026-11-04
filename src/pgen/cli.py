@@ -1,4 +1,4 @@
-"""pgen CLI: ingest / status. Build & make land in M2/M3."""
+"""pgen CLI: ingest / build / make / status."""
 
 from __future__ import annotations
 
@@ -18,15 +18,6 @@ from .ingest.spotify_history import ingest_spotify_history
 DEFAULT_DB_PATH = Path.home() / ".local/share/pgen/v2.db"
 DEFAULT_LIBRARY = Path.home() / "Music"
 PARQUET_DIR_DEFAULT = os.environ.get("PGEN_PARQUET_DIR", "")
-
-
-def _autodetect_ipod_itdb() -> Path | None:
-    base = Path("/run/media")
-    if not base.exists():
-        return None
-    for itdb in sorted(base.glob("*/*/iPod_Control/iTunes/iTunesDB")):
-        return itdb
-    return None
 
 
 def cmd_ingest(args) -> int:
